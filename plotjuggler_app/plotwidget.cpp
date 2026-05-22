@@ -72,6 +72,60 @@ const double MAX_DOUBLE = std::numeric_limits<double>::max() / 2;
 
 static bool if_xy_plot_failed_show_dialog = true;
 
+class QwtStringTimeseries : public QwtSeriesData<QPointF>
+{
+public:
+  explicit QwtStringTimeseries(const StringSeries* data) : _data(data)
+  {
+  }
+
+  QPointF sample(size_t i) const override
+  {
+    const auto& p = _data->at(i);
+    return QPointF(p.x - _time_offset, static_cast<double>(p.y.index));
+  }
+
+  size_t size() const override
+  {
+    return _data->size();
+  }
+
+  QRectF boundingRect() const override
+  {
+    if (_data->size() == 0)
+    {
+      return {};
+    }
+
+    auto range_x_opt = _data->rangeX();
+    if (!range_x_opt)
+    {
+      return {};
+    }
+    auto range_x = range_x_opt.value();
+
+    double min_y = std::numeric_limits<double>::max();
+    double max_y = std::numeric_limits<double>::lowest();
+    for (size_t i = 0; i < _data->size(); i++)
+    {
+      const auto y = static_cast<double>(_data->at(i).y.index);
+      min_y = std::min(min_y, y);
+      max_y = std::max(max_y, y);
+    }
+    return QRectF(QPointF(range_x.min - _time_offset, max_y),
+                  QPointF(range_x.max - _time_offset, min_y));
+  }
+
+  void setTimeOffset(double offset)
+  {
+    _time_offset = offset;
+  }
+
+private:
+  const StringSeries* _data;
+  double _time_offset = 0.0;
+};
+
 PlotWidget::PlotWidget(PlotDataMapRef& datamap, QWidget* parent)
   : PlotWidgetBase(parent)
   , _mapped_data(datamap)
@@ -402,12 +456,46 @@ PlotWidgetBase::CurveInfo* PlotWidget::addCurve(const std::string& name, QColor 
   {
     info = PlotWidgetBase::addCurve(name, it2->second, color);
   }
+  auto it3 = _mapped_data.strings.find(name);
+  if (it3 != _mapped_data.strings.end())
+  {
+    auto curve = new QwtPlotCurve(QString::fromStdString(name));
+    auto plot_qwt = new QwtStringTimeseries(&it3->second);
+    curve->setPaintAttribute(QwtPlotCurve::ClipPolygons, true);
+    curve->setPaintAttribute(QwtPlotCurve::FilterPointsAggressive, true);
+    curve->setData(plot_qwt);
+
+    if (color == Qt::transparent)
+    {
+      color = getColorHint(nullptr);
+    }
+    curve->setPen(color);
+    setStyle(curve, curveStyle());
+    curve->setRenderHint(QwtPlotItem::RenderAntialiased, true);
+    curve->attach(qwtPlot());
+
+    auto marker = new QwtPlotMarker;
+    marker->attach(qwtPlot());
+    marker->setVisible(false);
+    marker->setSymbol(new QwtSymbol(QwtSymbol::Ellipse, color, QPen(Qt::black), QSize(8, 8)));
+
+    CurveInfo curve_info;
+    curve_info.curve = curve;
+    curve_info.marker = marker;
+    curve_info.src_name = name;
+    curveList().push_back(curve_info);
+    info = &(curveList().back());
+  }
 
   if (info && info->curve)
   {
     if (auto timeseries = dynamic_cast<QwtTimeseries*>(info->curve->data()))
     {
       timeseries->setTimeOffset(_time_offset);
+    }
+    else if (auto string_series = dynamic_cast<QwtStringTimeseries*>(info->curve->data()))
+    {
+      string_series->setTimeOffset(_time_offset);
     }
   }
   _tracker->redraw();
