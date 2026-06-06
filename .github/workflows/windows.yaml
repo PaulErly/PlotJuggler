@@ -51,6 +51,34 @@ jobs:
           # repos: unlimited storage and bandwidth; tags survive forever.
           cache_packages: false
 
+      - name: Detect Conan cache location
+        shell: pwsh
+        run: |
+          $conanVersion = conan --version
+          Write-Host $conanVersion
+          if ($conanVersion -match 'Conan version\s+(\d+)') {
+            $conanMajor = $Matches[1]
+            $conanHome = if ($conanMajor -eq '1') { Join-Path $env:USERPROFILE '.conan' } else { Join-Path $env:USERPROFILE '.conan2' }
+            "CONAN_MAJOR=$conanMajor" | Out-File -FilePath $env:GITHUB_ENV -Append
+            "CONAN_HOME=$conanHome" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "Conan home: $conanHome"
+          } else {
+            Write-Error "Unable to parse Conan version: $conanVersion"
+            exit 1
+          }
+
+      - name: Cache Conan packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.conan
+            ~/.conan2
+          key: >-
+            ${{ runner.os }}-msvc-${{ env.CONAN_MAJOR }}-${{ hashFiles('conanfile.txt', 'conanfile.py', 'conandata.yml', 'CMakeLists.txt', 'plotjuggler_app/CMakeLists.txt', 'plotjuggler_plugins/CMakeLists.txt', 'cmake/**/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-msvc-${{ env.CONAN_MAJOR }}-
+            ${{ runner.os }}-msvc-
+
       - name: Setup oras (OCI Registry As Storage)
         # Primary install path. continue-on-error so a 5xx on the github.com
         # release CDN doesn't kill CI — we have a fallback below, and worst
@@ -170,8 +198,9 @@ jobs:
           # contains the package binaries consumers actually need.
           conan cache clean "*" --build --source --temp
 
-          Write-Host "Packing ~/.conan2 -> $tarball"
-          tar --zstd -cf $tarball -C $env:USERPROFILE .conan2
+          $cacheDir = if ($env:CONAN_HOME) { $env:CONAN_HOME } else { Join-Path $env:USERPROFILE '.conan2' }
+          Write-Host "Packing $cacheDir -> $tarball"
+          tar --zstd -cf $tarball -C $env:USERPROFILE ([System.IO.Path]::GetFileName($cacheDir))
 
           $size = (Get-Item $tarball).Length / 1MB
           Write-Host ("Compressed cache size: {0:N1} MB" -f $size)
