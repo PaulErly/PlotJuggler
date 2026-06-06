@@ -254,6 +254,9 @@ private:
   void setAxisScale(QwtAxisId axisId, double min, double max);
 
   void updateCategoricalAxisLabels();
+  QString displayCurveName(const std::string& curve_name, const PlotDataBase<double, double>* data) const;
+  QString displayCurveName(const std::string& curve_name, const StringSeries* data) const;
+  void refreshCurveMetadata();
 };
 
 #endif

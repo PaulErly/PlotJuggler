@@ -10,6 +10,7 @@
 #include <set>
 #include <deque>
 #include <functional>
+#include <vector>
 
 #include <QCommandLineParser>
 #include <QElapsedTimer>
@@ -38,6 +39,23 @@
 
 class QVBoxLayout;
 
+struct DatasetInfo
+{
+  QString label;
+  QString source_path;
+  QString prefix;
+  double time_offset = 0.0;
+  bool comparison_mode = false;
+};
+
+enum class CompareEventType
+{
+  RisingEdge,
+  FallingEdge,
+  FirstNonZero,
+  FirstValueChange
+};
+
 class MainWindow : public QMainWindow
 {
   Q_OBJECT
@@ -50,6 +68,8 @@ public:
   bool loadLayoutFromFile(QString filename, bool load_datafiles = true);
   bool loadDataFromFiles(QStringList filenames, bool auto_prefix = false);
   std::unordered_set<std::string> loadDataFromFile(const FileLoadInfo& info, bool merge_files);
+  bool loadDatasetFromFile(QString filename);
+  void openCompareLogsDialog();
 
   void stopStreamingPlugin();
   void startStreamingPlugin(QString streamer_name);
@@ -169,6 +189,9 @@ private:
   QMovie* _animated_streaming_movie;
   QTimer* _animated_streaming_timer;
 
+  std::vector<DatasetInfo> _comparison_datasets;
+  bool _comparison_mode_enabled = false;
+
   enum LabelStatus
   {
     LEFT,
@@ -242,6 +265,19 @@ private:
 
   void updateTimeSlider();
   void updateTimeOffset();
+  void refreshComparisonDatasetMetadata();
+  void applyDatasetMetadata(PlotDataMapRef& data, const DatasetInfo& dataset);
+  void annotateCurrentDataAsDataset(const DatasetInfo& dataset);
+  DatasetInfo* datasetByLabel(const QString& label);
+  const DatasetInfo* datasetByLabel(const QString& label) const;
+  QString nextDatasetLabel() const;
+  QString displayCurveName(const std::string& curve_name) const;
+  void setComparisonDatasetOffset(const QString& label, double offset);
+  QStringList comparisonDatasetLabels() const;
+  QStringList comparisonSignals(const QString& label) const;
+  bool alignComparisonDataset(const QString& target_label, const QString& reference_label,
+                              const QString& target_signal, const QString& reference_signal,
+                              CompareEventType event_type);
 
   void buildDummyData();
 

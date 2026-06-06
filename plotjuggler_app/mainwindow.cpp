@@ -5,8 +5,11 @@
  */
 
 #include <functional>
+#include <algorithm>
 #include <queue>
 #include <stdio.h>
+#include <optional>
+#include <type_traits>
 
 #include <QApplication>
 #include <QActionGroup>
@@ -23,6 +26,14 @@
 #include <QMenu>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QVBoxLayout>
+#include <QFormLayout>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QAbstractItemView>
+#include <QTableWidget>
+#include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
@@ -63,6 +74,7 @@
 #include "nlohmann_parsers.h"
 #include "cheatsheet/cheatsheet_dialog.h"
 #include "colormap_editor.h"
+#include "PlotJuggler/plotdatabase.h"
 
 #ifdef COMPILED_WITH_CATKIN
 
@@ -155,6 +167,126 @@ static void WriteSortedXml(QTextStream& out, const QDomNode& node, int indent = 
 bool isMosaicoToolbox(const QString& plugin_name)
 {
   return plugin_name.contains(QStringLiteral("mosaico"), Qt::CaseInsensitive);
+}
+
+template <typename SeriesMap>
+void applyDatasetAttributesToSeriesMap(SeriesMap& series_map, const DatasetInfo& dataset)
+{
+  for (auto& [name, series] : series_map)
+  {
+    Q_UNUSED(name);
+    series.setAttribute(PJ::DATASET_TIME_OFFSET, dataset.time_offset);
+    if (!dataset.label.isEmpty())
+    {
+      series.setAttribute(PJ::DATASET_LABEL, dataset.label);
+    }
+    if (!dataset.source_path.isEmpty())
+    {
+      series.setAttribute(PJ::DATASET_SOURCE, dataset.source_path);
+    }
+  }
+}
+
+QString seriesDisplayLabel(const QVariant& dataset_label, const QString& curve_name)
+{
+  const QString label = dataset_label.toString().trimmed();
+  if (label.isEmpty())
+  {
+    return curve_name;
+  }
+  if (curve_name.startsWith(label + "/"))
+  {
+    return curve_name;
+  }
+  if (curve_name.startsWith('/'))
+  {
+    return label + curve_name;
+  }
+  return label + "/" + curve_name;
+}
+
+template <typename SeriesT>
+std::optional<double> firstEventTime(const SeriesT& series, CompareEventType event_type)
+{
+  if (series.size() == 0)
+  {
+    return std::nullopt;
+  }
+
+  auto valueAt = [&](size_t idx) { return series.at(idx).y; };
+  auto timeAt = [&](size_t idx) { return series.at(idx).x; };
+  using ValueT = std::decay_t<decltype(valueAt(0))>;
+
+  if constexpr (std::is_arithmetic_v<ValueT>)
+  {
+    switch (event_type)
+    {
+      case CompareEventType::FirstNonZero:
+        for (size_t i = 0; i < series.size(); ++i)
+        {
+          if (valueAt(i) != ValueT{})
+          {
+            return timeAt(i);
+          }
+        }
+        break;
+      case CompareEventType::FirstValueChange:
+      {
+        auto first = valueAt(0);
+        for (size_t i = 1; i < series.size(); ++i)
+        {
+          if (valueAt(i) != first)
+          {
+            return timeAt(i);
+          }
+        }
+        break;
+      }
+      case CompareEventType::RisingEdge:
+        for (size_t i = 1; i < series.size(); ++i)
+        {
+          if (valueAt(i - 1) <= ValueT{} && valueAt(i) > ValueT{})
+          {
+            return timeAt(i);
+          }
+        }
+        break;
+      case CompareEventType::FallingEdge:
+        for (size_t i = 1; i < series.size(); ++i)
+        {
+          if (valueAt(i - 1) > ValueT{} && valueAt(i) <= ValueT{})
+          {
+            return timeAt(i);
+          }
+        }
+        break;
+    }
+  }
+  else
+  {
+    switch (event_type)
+    {
+      case CompareEventType::FirstNonZero:
+      case CompareEventType::FirstValueChange:
+      case CompareEventType::RisingEdge:
+      case CompareEventType::FallingEdge:
+      {
+        auto first = valueAt(0);
+        for (size_t i = 1; i < series.size(); ++i)
+        {
+          if (valueAt(i) != first)
+          {
+            return timeAt(i);
+          }
+        }
+        break;
+      }
+      case CompareEventType::RisingEdge:
+      case CompareEventType::FallingEdge:
+        break;
+    }
+  }
+  return std::nullopt;
 }
 
 MainWindow::MainWindow(const QCommandLineParser& commandline_parser, QWidget* parent)
@@ -610,6 +742,10 @@ void MainWindow::onTrackerTimeUpdated(double absolute_time, bool do_replot)
 
 void MainWindow::initializeActions()
 {
+  auto compare_logs_action = new QAction(tr("Compare &logs..."), this);
+  connect(compare_logs_action, &QAction::triggered, this, &MainWindow::openCompareLogsDialog);
+  ui->menuTools->addAction(compare_logs_action);
+
   _undo_shortcut.setContext(Qt::ApplicationShortcut);
   _redo_shortcut.setContext(Qt::ApplicationShortcut);
   _fullscreen_shortcut.setContext(Qt::ApplicationShortcut);
@@ -887,6 +1023,433 @@ void MainWindow::buildDummyData()
   importPlotDataMap(datamap, true);
 }
 
+DatasetInfo* MainWindow::datasetByLabel(const QString& label)
+{
+  auto it = std::find_if(_comparison_datasets.begin(), _comparison_datasets.end(),
+                         [&label](const DatasetInfo& dataset) {
+                           return dataset.label == label;
+                         });
+  return (it == _comparison_datasets.end()) ? nullptr : &(*it);
+}
+
+const DatasetInfo* MainWindow::datasetByLabel(const QString& label) const
+{
+  auto it = std::find_if(_comparison_datasets.begin(), _comparison_datasets.end(),
+                         [&label](const DatasetInfo& dataset) {
+                           return dataset.label == label;
+                         });
+  return (it == _comparison_datasets.end()) ? nullptr : &(*it);
+}
+
+QString MainWindow::nextDatasetLabel() const
+{
+  auto makeLabel = [](int index) {
+    QString label;
+    do
+    {
+      int n = index % 26;
+      label.prepend(QChar('A' + n));
+      index = index / 26 - 1;
+    } while (index >= 0);
+    return "[" + label + "]";
+  };
+
+  for (int index = 0; index < 4096; ++index)
+  {
+    QString label = makeLabel(index);
+    if (!datasetByLabel(label))
+    {
+      return label;
+    }
+  }
+  return "[ZZZ]";
+}
+
+QString MainWindow::displayCurveName(const std::string& curve_name) const
+{
+  return QString::fromStdString(curve_name);
+}
+
+void MainWindow::applyDatasetMetadata(PlotDataMapRef& data, const DatasetInfo& dataset)
+{
+  applyDatasetAttributesToSeriesMap(data.numeric, dataset);
+  applyDatasetAttributesToSeriesMap(data.scatter_xy, dataset);
+  applyDatasetAttributesToSeriesMap(data.strings, dataset);
+  applyDatasetAttributesToSeriesMap(data.user_defined, dataset);
+}
+
+void MainWindow::annotateCurrentDataAsDataset(const DatasetInfo& dataset)
+{
+  auto annotate = [&](auto& map) {
+    for (auto& [name, series] : map)
+    {
+      Q_UNUSED(name);
+      if (!series.attribute(PJ::DATASET_LABEL).isValid())
+      {
+        series.setAttribute(PJ::DATASET_TIME_OFFSET, dataset.time_offset);
+        if (!dataset.label.isEmpty())
+        {
+          series.setAttribute(PJ::DATASET_LABEL, dataset.label);
+        }
+        if (!dataset.source_path.isEmpty())
+        {
+          series.setAttribute(PJ::DATASET_SOURCE, dataset.source_path);
+        }
+      }
+    }
+  };
+  annotate(_mapped_plot_data.numeric);
+  annotate(_mapped_plot_data.scatter_xy);
+  annotate(_mapped_plot_data.strings);
+  annotate(_mapped_plot_data.user_defined);
+  forEachWidget([](PlotWidget* plot) { plot->refreshCurveMetadata(); plot->replot(); });
+  _curvelist_widget->refreshColumns();
+}
+
+QStringList MainWindow::comparisonDatasetLabels() const
+{
+  QStringList out;
+  for (const auto& dataset : _comparison_datasets)
+  {
+    out.push_back(dataset.label);
+  }
+  return out;
+}
+
+QStringList MainWindow::comparisonSignals(const QString& label) const
+{
+  QStringList out;
+  const auto* dataset = datasetByLabel(label);
+  if (!dataset)
+  {
+    return out;
+  }
+
+  auto collect = [&](const auto& map) {
+    for (const auto& [name, series] : map)
+    {
+      QVariant series_label = series.attribute(PJ::DATASET_LABEL);
+      if (series_label.toString() == label || (label.isEmpty() && !series_label.isValid()))
+      {
+        out.push_back(QString::fromStdString(name));
+      }
+    }
+  };
+
+  collect(_mapped_plot_data.numeric);
+  collect(_mapped_plot_data.strings);
+  collect(_mapped_plot_data.scatter_xy);
+  return out;
+}
+
+void MainWindow::setComparisonDatasetOffset(const QString& label, double offset)
+{
+  auto* dataset = datasetByLabel(label);
+  if (!dataset)
+  {
+    return;
+  }
+  dataset->time_offset = offset;
+
+  auto updateMap = [&](auto& map) {
+    for (auto& [name, series] : map)
+    {
+      QVariant series_label = series.attribute(PJ::DATASET_LABEL);
+      if (series_label.toString() == label || (label.isEmpty() && !series_label.isValid()))
+      {
+        series.setAttribute(PJ::DATASET_TIME_OFFSET, offset);
+      }
+    }
+  };
+
+  updateMap(_mapped_plot_data.numeric);
+  updateMap(_mapped_plot_data.strings);
+  updateMap(_mapped_plot_data.scatter_xy);
+  updateMap(_mapped_plot_data.user_defined);
+
+  forEachWidget([](PlotWidget* plot) { plot->refreshCurveMetadata(); plot->replot(); });
+}
+
+void MainWindow::refreshComparisonDatasetMetadata()
+{
+  forEachWidget([](PlotWidget* plot) { plot->refreshCurveMetadata(); plot->replot(); });
+  _curvelist_widget->refreshColumns();
+}
+
+bool MainWindow::loadDatasetFromFile(QString filename)
+{
+  DatasetInfo dataset;
+  dataset.label = nextDatasetLabel();
+  dataset.prefix = dataset.label;
+  dataset.source_path = filename;
+  dataset.time_offset = 0.0;
+  dataset.comparison_mode = true;
+
+  auto has_unlabeled_series = [this]() {
+    auto any_unlabeled = [](const auto& map) {
+      for (const auto& [name, series] : map)
+      {
+        Q_UNUSED(name);
+        if (!series.attribute(PJ::DATASET_LABEL).isValid())
+        {
+          return true;
+        }
+      }
+      return false;
+    };
+    return any_unlabeled(_mapped_plot_data.numeric) || any_unlabeled(_mapped_plot_data.strings) ||
+           any_unlabeled(_mapped_plot_data.scatter_xy);
+  };
+
+  if (!datasetByLabel("[A]") && has_unlabeled_series())
+  {
+    _comparison_mode_enabled = true;
+
+    DatasetInfo primary;
+    primary.label = "[A]";
+    primary.source_path = _loaded_datafiles_history.empty() ? tr("Current session") :
+                                                             _loaded_datafiles_history.front().filename;
+    primary.prefix = {};
+    primary.time_offset = 0.0;
+    primary.comparison_mode = true;
+    _comparison_datasets.push_back(primary);
+    applyDatasetMetadata(_mapped_plot_data, primary);
+  }
+
+  FileLoadInfo info;
+  info.filename = filename;
+  info.prefix = dataset.prefix;
+  info.plugin_config = {};
+
+  auto added_names = loadDataFromFile(info, true);
+  if (!added_names.empty())
+  {
+    _comparison_mode_enabled = true;
+    refreshComparisonDatasetMetadata();
+    return true;
+  }
+  return false;
+}
+
+bool MainWindow::alignComparisonDataset(const QString& target_label, const QString& reference_label,
+                                        const QString& target_signal,
+                                        const QString& reference_signal,
+                                        CompareEventType event_type)
+{
+  auto* target = datasetByLabel(target_label);
+  auto* reference = datasetByLabel(reference_label);
+  if (!target || !reference)
+  {
+    return false;
+  }
+
+  auto eventTimeFor = [&](const QString& label, const QString& signal) -> std::optional<double> {
+    const bool is_target = (label == target_label);
+    const auto& numeric_map = _mapped_plot_data.numeric;
+    const auto& string_map = _mapped_plot_data.strings;
+
+    auto findSeries = [&](const QString& curve_name) -> std::optional<double> {
+      auto name = curve_name.toStdString();
+      if (auto it = numeric_map.find(name); it != numeric_map.end())
+      {
+        return firstEventTime(it->second, event_type);
+      }
+      if (auto it = string_map.find(name); it != string_map.end())
+      {
+        return firstEventTime(it->second, event_type);
+      }
+      return std::nullopt;
+    };
+
+    Q_UNUSED(is_target);
+    return findSeries(signal);
+  };
+
+  auto ref_time = eventTimeFor(reference_label, reference_signal);
+  auto target_time = eventTimeFor(target_label, target_signal);
+  if (!ref_time || !target_time)
+  {
+    return false;
+  }
+
+  const double new_offset = ref_time.value() - target_time.value();
+  setComparisonDatasetOffset(target_label, new_offset);
+  return true;
+}
+
+void MainWindow::openCompareLogsDialog()
+{
+  auto has_unlabeled_series = [this]() {
+    auto any_unlabeled = [](const auto& map) {
+      for (const auto& [name, series] : map)
+      {
+        Q_UNUSED(name);
+        if (!series.attribute(PJ::DATASET_LABEL).isValid())
+        {
+          return true;
+        }
+      }
+      return false;
+    };
+    return any_unlabeled(_mapped_plot_data.numeric) || any_unlabeled(_mapped_plot_data.strings) ||
+           any_unlabeled(_mapped_plot_data.scatter_xy);
+  };
+
+  if (!datasetByLabel("[A]") && has_unlabeled_series())
+  {
+    DatasetInfo primary;
+    primary.label = "[A]";
+    primary.source_path = _loaded_datafiles_history.empty() ? tr("Current session") :
+                                                             _loaded_datafiles_history.front().filename;
+    primary.prefix = {};
+    primary.time_offset = 0.0;
+    primary.comparison_mode = true;
+    _comparison_datasets.push_back(primary);
+    _comparison_mode_enabled = true;
+    annotateCurrentDataAsDataset(primary);
+  }
+
+  QDialog dialog(this);
+  dialog.setWindowTitle(tr("Compare logs"));
+  dialog.setMinimumWidth(820);
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* table = new QTableWidget(&dialog);
+  table->setColumnCount(3);
+  table->setHorizontalHeaderLabels({ tr("Label"), tr("Source"), tr("Offset (s)") });
+  table->horizontalHeader()->setStretchLastSection(true);
+  table->setSelectionBehavior(QAbstractItemView::SelectRows);
+  table->setSelectionMode(QAbstractItemView::SingleSelection);
+  layout->addWidget(table);
+
+  auto* buttons = new QHBoxLayout();
+  auto* add_btn = new QPushButton(tr("Add dataset"), &dialog);
+  auto* offset_btn = new QPushButton(tr("Set offset"), &dialog);
+  auto* align_btn = new QPushButton(tr("Align by event"), &dialog);
+  auto* close_btn = new QPushButton(tr("Close"), &dialog);
+  buttons->addWidget(add_btn);
+  buttons->addWidget(offset_btn);
+  buttons->addWidget(align_btn);
+  buttons->addStretch(1);
+  buttons->addWidget(close_btn);
+  layout->addLayout(buttons);
+
+  auto refresh = [&]() {
+    table->setRowCount(int(_comparison_datasets.size()));
+    for (int i = 0; i < int(_comparison_datasets.size()); ++i)
+    {
+      const auto& ds = _comparison_datasets[size_t(i)];
+      table->setItem(i, 0, new QTableWidgetItem(ds.label));
+      table->setItem(i, 1, new QTableWidgetItem(ds.source_path));
+      table->setItem(i, 2, new QTableWidgetItem(QString::number(ds.time_offset, 'f', 3)));
+    }
+    table->resizeColumnsToContents();
+  };
+  refresh();
+
+  connect(add_btn, &QPushButton::clicked, &dialog, [&]() {
+    auto filename = QFileDialog::getOpenFileName(&dialog, tr("Load dataset"));
+    if (filename.isEmpty())
+    {
+      return;
+    }
+    if (loadDatasetFromFile(filename))
+    {
+      refresh();
+    }
+  });
+
+  connect(offset_btn, &QPushButton::clicked, &dialog, [&]() {
+    auto current = table->currentRow();
+    if (current < 0 || current >= int(_comparison_datasets.size()))
+    {
+      return;
+    }
+    bool ok = false;
+    double value = QInputDialog::getDouble(&dialog, tr("Set dataset offset"),
+                                           tr("Time offset (seconds):"),
+                                           _comparison_datasets[size_t(current)].time_offset,
+                                           -1e9, 1e9, 6, &ok);
+    if (ok)
+    {
+      setComparisonDatasetOffset(_comparison_datasets[size_t(current)].label, value);
+      refresh();
+    }
+  });
+
+  connect(align_btn, &QPushButton::clicked, &dialog, [&]() {
+    if (_comparison_datasets.size() < 2)
+    {
+      return;
+    }
+    QDialog align_dialog(&dialog);
+    align_dialog.setWindowTitle(tr("Align by event"));
+    auto* form = new QFormLayout(&align_dialog);
+    auto* ref_dataset = new QComboBox(&align_dialog);
+    auto* target_dataset = new QComboBox(&align_dialog);
+    auto* event_type = new QComboBox(&align_dialog);
+    event_type->addItem(tr("Rising edge"), int(CompareEventType::RisingEdge));
+    event_type->addItem(tr("Falling edge"), int(CompareEventType::FallingEdge));
+    event_type->addItem(tr("First non-zero"), int(CompareEventType::FirstNonZero));
+    event_type->addItem(tr("First value change"), int(CompareEventType::FirstValueChange));
+    for (const auto& ds : _comparison_datasets)
+    {
+      ref_dataset->addItem(ds.label, ds.label);
+      target_dataset->addItem(ds.label, ds.label);
+    }
+    if (ref_dataset->count() > 0)
+    {
+      ref_dataset->setCurrentIndex(0);
+    }
+    if (target_dataset->count() > 1)
+    {
+      target_dataset->setCurrentIndex(1);
+    }
+    auto* ref_signal = new QComboBox(&align_dialog);
+    auto* target_signal = new QComboBox(&align_dialog);
+    auto populateSignals = [&]() {
+      ref_signal->clear();
+      target_signal->clear();
+      for (const auto& sig : comparisonSignals(ref_dataset->currentText()))
+      {
+        ref_signal->addItem(sig, sig);
+      }
+      for (const auto& sig : comparisonSignals(target_dataset->currentText()))
+      {
+        target_signal->addItem(sig, sig);
+      }
+    };
+    populateSignals();
+    connect(ref_dataset, qOverload<int>(&QComboBox::currentIndexChanged), &align_dialog,
+            [&](int) { populateSignals(); });
+    connect(target_dataset, qOverload<int>(&QComboBox::currentIndexChanged), &align_dialog,
+            [&](int) { populateSignals(); });
+
+    form->addRow(tr("Reference dataset"), ref_dataset);
+    form->addRow(tr("Target dataset"), target_dataset);
+    form->addRow(tr("Reference signal"), ref_signal);
+    form->addRow(tr("Target signal"), target_signal);
+    form->addRow(tr("Event"), event_type);
+
+    auto* box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &align_dialog);
+    form->addRow(box);
+    connect(box, &QDialogButtonBox::accepted, &align_dialog, &QDialog::accept);
+    connect(box, &QDialogButtonBox::rejected, &align_dialog, &QDialog::reject);
+
+    if (align_dialog.exec() == QDialog::Accepted)
+    {
+      auto type = static_cast<CompareEventType>(event_type->currentData().toInt());
+      if (alignComparisonDataset(target_dataset->currentText(), ref_dataset->currentText(),
+                                 target_signal->currentText(), ref_signal->currentText(), type))
+      {
+        refresh();
+      }
+    }
+  });
+
+  connect(close_btn, &QPushButton::clicked, &dialog, &QDialog::accept);
+  dialog.exec();
+}
+
 void MainWindow::on_splitterMoved(int size, int index)
 {
   QList<int> sizes = ui->mainSplitter->sizes();
@@ -1055,6 +1618,22 @@ QDomDocument MainWindow::xmlSaveState() const
   QDomElement streaming_buffer = doc.createElement("streaming_buffer_size");
   streaming_buffer.setAttribute("value", ui->streamingSpinBox->value());
   root.appendChild(streaming_buffer);
+
+  if (!_comparison_datasets.empty())
+  {
+    QDomElement datasets_elem = doc.createElement("comparison_datasets");
+    for (const auto& dataset : _comparison_datasets)
+    {
+      QDomElement elem = doc.createElement("dataset");
+      elem.setAttribute("label", dataset.label);
+      elem.setAttribute("source", dataset.source_path);
+      elem.setAttribute("prefix", dataset.prefix);
+      elem.setAttribute("offset", QString::number(dataset.time_offset, 'f', 6));
+      elem.setAttribute("comparison_mode", dataset.comparison_mode ? "true" : "false");
+      datasets_elem.appendChild(elem);
+    }
+    root.appendChild(datasets_elem);
+  }
 
   return doc;
 }
@@ -1320,6 +1899,8 @@ void MainWindow::deleteAllData()
   _transform_functions.clear();
   _curvelist_widget->clear();
   _loaded_datafiles_history.clear();
+  _comparison_datasets.clear();
+  _comparison_mode_enabled = false;
   _undo_states.clear();
   _redo_states.clear();
 
@@ -1367,6 +1948,7 @@ void MainWindow::importPlotDataMap(PlotDataMapRef& new_data, bool remove_old)
     ClearOldSeries(_mapped_plot_data.scatter_xy, new_data.scatter_xy);
     ClearOldSeries(_mapped_plot_data.numeric, new_data.numeric);
     ClearOldSeries(_mapped_plot_data.strings, new_data.strings);
+    ClearOldSeries(_mapped_plot_data.user_defined, new_data.user_defined);
   }
 
   auto [added_curves, curve_updated, data_pushed] =
@@ -1576,6 +2158,23 @@ std::unordered_set<std::string> MainWindow::loadDataFromFile(const FileLoadInfo&
       {
         AddPrefixToPlotData(info.prefix.toStdString(), mapped_data.numeric);
         AddPrefixToPlotData(info.prefix.toStdString(), mapped_data.strings);
+        AddPrefixToPlotData(info.prefix.toStdString(), mapped_data.scatter_xy);
+        AddPrefixToPlotData(info.prefix.toStdString(), mapped_data.user_defined);
+
+        if (!info.prefix.isEmpty())
+        {
+          DatasetInfo dataset;
+          dataset.label = info.prefix;
+          dataset.prefix = info.prefix;
+          dataset.source_path = info.filename;
+          dataset.time_offset = 0.0;
+          applyDatasetMetadata(mapped_data, dataset);
+          if (!datasetByLabel(dataset.label))
+          {
+            _comparison_datasets.push_back(dataset);
+            _comparison_mode_enabled = true;
+          }
+        }
 
         added_names = mapped_data.getAllNames();
         bool remove_old = !merge_files;
@@ -2187,6 +2786,35 @@ bool MainWindow::loadLayoutFromFile(QString filename, bool load_datafiles)
 
       loadDataFromFile(info, false);
       datafile_elem = datafile_elem.nextSiblingElement("fileInfo");
+    }
+  }
+
+  QDomElement comparison_elem = root.firstChildElement("comparison_datasets");
+  if (!comparison_elem.isNull())
+  {
+    _comparison_datasets.clear();
+    for (QDomElement dataset_elem = comparison_elem.firstChildElement("dataset");
+         !dataset_elem.isNull(); dataset_elem = dataset_elem.nextSiblingElement("dataset"))
+    {
+      DatasetInfo dataset;
+      dataset.label = dataset_elem.attribute("label");
+      dataset.source_path = dataset_elem.attribute("source");
+      dataset.prefix = dataset_elem.attribute("prefix");
+      dataset.time_offset = dataset_elem.attribute("offset", "0").toDouble();
+      dataset.comparison_mode = dataset_elem.attribute("comparison_mode") == "true";
+      _comparison_datasets.push_back(dataset);
+    }
+    _comparison_mode_enabled = !_comparison_datasets.empty();
+    for (const auto& dataset : _comparison_datasets)
+    {
+      if (dataset.prefix.isEmpty())
+      {
+        annotateCurrentDataAsDataset(dataset);
+      }
+      else
+      {
+        setComparisonDatasetOffset(dataset.label, dataset.time_offset);
+      }
     }
   }
 
