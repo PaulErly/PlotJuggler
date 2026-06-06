@@ -113,6 +113,7 @@ PlotWidget::PlotWidget(PlotDataMapRef& datamap, QWidget* parent)
   _tracker = (new CurveTracker(qwtPlot(), Qt::red));
   _reference_tracker = (new CurveTracker(qwtPlot(), Qt::blue));
   _reference_tracker->setParameter(CurveTracker::LINE_ONLY);
+  _reference_tracker->setEnabled(false);
 
   _grid = new QwtPlotGrid();
   _grid->setPen(QPen(Qt::gray, 0.0, Qt::DotLine));
@@ -1130,7 +1131,6 @@ void PlotWidget::configureTracker(CurveTracker::Parameter val)
 void PlotWidget::enableTracker(bool enable)
 {
   _tracker->setEnabled(enable && !isXYPlot());
-  _reference_tracker->setEnabled(enable && !isXYPlot());
 }
 
 bool PlotWidget::isTrackerEnabled() const

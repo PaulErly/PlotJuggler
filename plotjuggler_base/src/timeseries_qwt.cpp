@@ -61,6 +61,20 @@ RangeOpt QwtTimeseries::getVisualizationRangeY(Range range_X)
     min_y = std::min(min_y, Y);
     max_y = std::max(max_y, Y);
   }
+  if (min_y == max_y)
+  {
+    if (std::abs(min_y) < std::numeric_limits<double>::epsilon())
+    {
+      min_y = 0.0;
+      max_y = 1.0;
+    }
+    else
+    {
+      const double pad = std::abs(min_y) * 0.1;
+      min_y -= pad;
+      max_y += pad;
+    }
+  }
   return Range{ min_y, max_y };
 }
 
@@ -290,6 +304,13 @@ RangeOpt QwtStringTimeseries::getVisualizationRangeY(Range range_x)
     const double y = _data->at(size_t(i)).y.index;
     min_y = std::min(min_y, y);
     max_y = std::max(max_y, y);
+  }
+
+  if (min_y == max_y)
+  {
+    const double pad = (std::abs(min_y) < 1.0) ? 1.0 : std::abs(min_y) * 0.1;
+    min_y -= pad;
+    max_y += pad;
   }
   return Range{ min_y, max_y };
 }

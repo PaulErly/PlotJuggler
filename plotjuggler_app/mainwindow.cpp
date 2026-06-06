@@ -343,11 +343,6 @@ MainWindow::MainWindow(const QCommandLineParser& commandline_parser, QWidget* pa
   this->setMenuBar(ui->menuBar);
   ui->menuBar->setNativeMenuBar(false);
 
-  if (_test_option)
-  {
-    buildDummyData();
-  }
-
   bool file_loaded = false;
   if (commandline_parser.isSet("datafile"))
   {
@@ -3231,7 +3226,6 @@ void MainWindow::on_buttonLoadDatafile_clicked()
   loadDialog.setViewMode(QFileDialog::Detail);
   loadDialog.setNameFilter(extensions.join(";;"));
   loadDialog.setDirectory(directory_path);
-  loadDialog.setOption(QFileDialog::DontUseNativeDialog, true);
 
   QStringList fileNames;
   if (loadDialog.exec())

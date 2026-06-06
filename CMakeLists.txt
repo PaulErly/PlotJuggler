@@ -194,6 +194,9 @@ find_or_download_lz4()
 include(${PROJECT_SOURCE_DIR}/cmake/find_or_download_zstd.cmake)
 find_or_download_zstd()
 
+include(${PROJECT_SOURCE_DIR}/cmake/find_or_download_mdflib.cmake)
+find_or_download_mdflib()
+
 if(NOT COMPILING_WITH_AMENT)
   include(cmake/download_wasmer.cmake)
   download_wasmer()
