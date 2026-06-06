@@ -349,10 +349,20 @@ jobs:
 
       - name: Upload installer
         uses: actions/upload-artifact@v7
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
         with:
-          name: PlotJuggler-${{ env.SAFE_REF }}-Windows-x64.exe
-          path: PlotJuggler-${{ env.SAFE_REF }}-Windows-x64.exe
+          name: plotjuggler-windows-installer
+          path: PlotJuggler-*-Windows-x64.exe
+
+      - name: List installer outputs
+        shell: pwsh
+        if: always()
+        run: |
+          Write-Host "Current directory: $(Get-Location)"
+          Write-Host "Installer files:"
+          Get-ChildItem -Path . -Filter 'PlotJuggler-*-Windows-x64.exe' -File | Format-Table Name, Length, LastWriteTime
+          Write-Host "Installer directory:"
+          Get-ChildItem -Path installer -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
 
       - name: Upload to Release
         if: startsWith(github.ref, 'refs/tags/')
