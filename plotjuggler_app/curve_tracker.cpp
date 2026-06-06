@@ -11,6 +11,7 @@
 #include "qwt_scale_map.h"
 #include "qwt_symbol.h"
 #include "qwt_text.h"
+#include "timeseries_qwt.h"
 #include <qevent.h>
 #include <QFontDatabase>
 #include <QSettings>
@@ -155,8 +156,9 @@ void CurveTracker::setPosition(const QPointF& tracker_position)
       visible_points++;
       double value = point.y();
       LineParts parts;
-      parts.value = QString::number(value, 'f', prec);
-      if (maybe_reference)
+      const auto series = dynamic_cast<const QwtSeriesWrapper*>(curve->data());
+      parts.value = series ? series->formatValue(value, prec) : QString::number(value, 'f', prec);
+      if (maybe_reference && (!series || !series->isCategorical()))
       {
         auto delta_str = QString::number(value - maybe_reference->y(), 'f', prec);
         parts.delta = QString(" (Δ %1)").arg(delta_str);

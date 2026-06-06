@@ -1,4 +1,5 @@
 add_subdirectory(DataLoadCSV)
+add_subdirectory(DataLoadMDF)
 add_subdirectory(DataLoadMCAP)
 add_subdirectory(DataLoadParquet)
 add_subdirectory(DataLoadULog)

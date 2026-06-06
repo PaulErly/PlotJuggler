@@ -5,6 +5,7 @@
  */
 
 #include "timeseries_qwt.h"
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <QMessageBox>
@@ -31,6 +32,11 @@ RangeOpt QwtSeriesWrapper::getVisualizationRangeY(Range range_x)
   return Range{ min_y, max_y };
 }
 
+QString QwtSeriesWrapper::formatValue(double value, int precision) const
+{
+  return QString::number(value, 'f', precision);
+}
+
 RangeOpt QwtTimeseries::getVisualizationRangeY(Range range_X)
 {
   int first_index = _ts_data->getIndexFromX(range_X.min + _time_offset);
@@ -54,6 +60,20 @@ RangeOpt QwtTimeseries::getVisualizationRangeY(Range range_X)
     const double Y = sample(i).y();
     min_y = std::min(min_y, Y);
     max_y = std::max(max_y, Y);
+  }
+  if (min_y == max_y)
+  {
+    if (std::abs(min_y) < std::numeric_limits<double>::epsilon())
+    {
+      min_y = 0.0;
+      max_y = 1.0;
+    }
+    else
+    {
+      const double pad = std::abs(min_y) * 0.1;
+      min_y -= pad;
+      max_y += pad;
+    }
   }
   return Range{ min_y, max_y };
 }
@@ -224,4 +244,80 @@ RangeOpt QwtTimeseries::getVisualizationRangeX()
 const PlotDataBase<double, double>* QwtSeriesWrapper::plotData() const
 {
   return _data;
+}
+
+QPointF QwtStringTimeseries::sample(size_t i) const
+{
+  const auto& p = _data->at(i);
+  return QPointF(p.x - _time_offset, p.y.index);
+}
+
+size_t QwtStringTimeseries::size() const
+{
+  return _data->size();
+}
+
+QRectF QwtStringTimeseries::boundingRect() const
+{
+  if (size() == 0)
+  {
+    return {};
+  }
+  auto range_x = _data->rangeX().value();
+
+  QRectF box;
+  box.setLeft(range_x.min - _time_offset);
+  box.setRight(range_x.max - _time_offset);
+  box.setTop(double(_data->stringCount() - 1));
+  box.setBottom(0.0);
+  return box;
+}
+
+void QwtStringTimeseries::setTimeOffset(double offset)
+{
+  _time_offset = offset;
+}
+
+RangeOpt QwtStringTimeseries::getVisualizationRangeX()
+{
+  if (size() < 2)
+  {
+    return {};
+  }
+  auto range = _data->rangeX().value();
+  return Range{ range.min - _time_offset, range.max - _time_offset };
+}
+
+RangeOpt QwtStringTimeseries::getVisualizationRangeY(Range range_x)
+{
+  int first_index = _data->getIndexFromX(range_x.min + _time_offset);
+  int last_index = _data->getIndexFromX(range_x.max + _time_offset);
+  if (first_index > last_index || first_index < 0 || last_index < 0)
+  {
+    return {};
+  }
+
+  double min_y = std::numeric_limits<double>::max();
+  double max_y = std::numeric_limits<double>::lowest();
+  for (int i = first_index; i <= last_index; i++)
+  {
+    const double y = _data->at(size_t(i)).y.index;
+    min_y = std::min(min_y, y);
+    max_y = std::max(max_y, y);
+  }
+
+  if (min_y == max_y)
+  {
+    const double pad = (std::abs(min_y) < 1.0) ? 1.0 : std::abs(min_y) * 0.1;
+    min_y -= pad;
+    max_y += pad;
+  }
+  return Range{ min_y, max_y };
+}
+
+QString QwtStringTimeseries::formatValue(double value, int) const
+{
+  const auto index = static_cast<uint32_t>(std::llround(value));
+  const auto text = _data->getString(StringDictIndex(index));
+  return QString::fromUtf8(text.data(), int(text.size())).toHtmlEscaped();
 }

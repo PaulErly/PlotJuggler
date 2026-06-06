@@ -343,11 +343,6 @@ MainWindow::MainWindow(const QCommandLineParser& commandline_parser, QWidget* pa
   this->setMenuBar(ui->menuBar);
   ui->menuBar->setNativeMenuBar(false);
 
-  if (_test_option)
-  {
-    buildDummyData();
-  }
-
   bool file_loaded = false;
   if (commandline_parser.isSet("datafile"))
   {
@@ -1102,11 +1097,8 @@ void MainWindow::checkAllCurvesFromLayout(const QDomElement& root)
 
   for (auto& curve_name : curves)
   {
-    if (_mapped_plot_data.numeric.count(curve_name) == 0)
-    {
-      missing_curves.push_back(curve_name);
-    }
-    if (_mapped_plot_data.strings.count(curve_name) == 0)
+    if (_mapped_plot_data.numeric.count(curve_name) == 0 &&
+        _mapped_plot_data.strings.count(curve_name) == 0)
     {
       missing_curves.push_back(curve_name);
     }
@@ -2066,18 +2058,31 @@ std::tuple<double, double, int> MainWindow::calculateVisibleRangeX()
       const auto& curve_name = it.src_name;
 
       auto plot_it = _mapped_plot_data.numeric.find(curve_name);
-      if (plot_it == _mapped_plot_data.numeric.end())
+      if (plot_it != _mapped_plot_data.numeric.end())
       {
-        continue;  // FIXME?
+        const auto& data = plot_it->second;
+        if (data.size() >= 1)
+        {
+          const double t0 = data.front().x;
+          const double t1 = data.back().x;
+          min_time = std::min(min_time, t0);
+          max_time = std::max(max_time, t1);
+          max_steps = std::max(max_steps, (int)data.size() - 1);
+        }
       }
-      const auto& data = plot_it->second;
-      if (data.size() >= 1)
+
+      auto string_it = _mapped_plot_data.strings.find(curve_name);
+      if (string_it != _mapped_plot_data.strings.end())
       {
-        const double t0 = data.front().x;
-        const double t1 = data.back().x;
-        min_time = std::min(min_time, t0);
-        max_time = std::max(max_time, t1);
-        max_steps = std::max(max_steps, (int)data.size() - 1);
+        const auto& data = string_it->second;
+        if (data.size() >= 1)
+        {
+          const double t0 = data.front().x;
+          const double t1 = data.back().x;
+          min_time = std::min(min_time, t0);
+          max_time = std::max(max_time, t1);
+          max_steps = std::max(max_steps, (int)data.size() - 1);
+        }
       }
     }
   });
@@ -2088,6 +2093,18 @@ std::tuple<double, double, int> MainWindow::calculateVisibleRangeX()
     for (const auto& it : _mapped_plot_data.numeric)
     {
       const PlotData& data = it.second;
+      if (data.size() >= 1)
+      {
+        const double t0 = data.front().x;
+        const double t1 = data.back().x;
+        min_time = std::min(min_time, t0);
+        max_time = std::max(max_time, t1);
+        max_steps = std::max(max_steps, (int)data.size() - 1);
+      }
+    }
+    for (const auto& it : _mapped_plot_data.strings)
+    {
+      const StringSeries& data = it.second;
       if (data.size() >= 1)
       {
         const double t0 = data.front().x;
@@ -3209,7 +3226,6 @@ void MainWindow::on_buttonLoadDatafile_clicked()
   loadDialog.setViewMode(QFileDialog::Detail);
   loadDialog.setNameFilter(extensions.join(";;"));
   loadDialog.setDirectory(directory_path);
-  loadDialog.setOption(QFileDialog::DontUseNativeDialog, true);
 
   QStringList fileNames;
   if (loadDialog.exec())

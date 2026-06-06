@@ -73,6 +73,11 @@ public:
     return _index_to_string[idx.index];
   }
 
+  size_t stringCount() const
+  {
+    return _index_to_string.size();
+  }
+
   std::optional<std::string_view> getStringFromX(double x) const
   {
     int index = getIndexFromX(x);
