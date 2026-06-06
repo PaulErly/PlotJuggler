@@ -281,9 +281,6 @@ std::optional<double> firstEventTime(const SeriesT& series, CompareEventType eve
         }
         break;
       }
-      case CompareEventType::RisingEdge:
-      case CompareEventType::FallingEdge:
-        break;
     }
   }
   return std::nullopt;
@@ -1178,13 +1175,6 @@ void MainWindow::refreshComparisonDatasetMetadata()
 
 bool MainWindow::loadDatasetFromFile(QString filename)
 {
-  DatasetInfo dataset;
-  dataset.label = nextDatasetLabel();
-  dataset.prefix = dataset.label;
-  dataset.source_path = filename;
-  dataset.time_offset = 0.0;
-  dataset.comparison_mode = true;
-
   auto has_unlabeled_series = [this]() {
     auto any_unlabeled = [](const auto& map) {
       for (const auto& [name, series] : map)
@@ -1215,6 +1205,13 @@ bool MainWindow::loadDatasetFromFile(QString filename)
     _comparison_datasets.push_back(primary);
     applyDatasetMetadata(_mapped_plot_data, primary);
   }
+
+  DatasetInfo dataset;
+  dataset.label = nextDatasetLabel();
+  dataset.prefix = dataset.label;
+  dataset.source_path = filename;
+  dataset.time_offset = 0.0;
+  dataset.comparison_mode = true;
 
   FileLoadInfo info;
   info.filename = filename;

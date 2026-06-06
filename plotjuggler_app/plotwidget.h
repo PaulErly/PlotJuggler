@@ -85,6 +85,8 @@ public:
 
   void changeDots(bool force_dots);
 
+  void refreshCurveMetadata();
+
 protected:
   PlotDataMapRef& _mapped_data;
 
@@ -232,8 +234,6 @@ private:
 
   QwtSeriesWrapper* createTimeSeries(const PlotData* data,
                                      const QString& transform_ID = {}) override;
-
-  void refreshCurveMetadata();
 
   double _time_offset;
 
