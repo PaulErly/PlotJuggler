@@ -67,6 +67,15 @@ jobs:
       - name: Configure CMake
         shell: pwsh
         run: |
+          $cmd = @'
+          cmake --preset conan-default -S . -B build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install" `
+            -DPJ_INSTALLATION="windows" `
+            -DPJ_PLUGINS_DIRECTORY="bin"
+          '@
+          Write-Host "Configure command:"
+          Write-Host $cmd
           cmake --preset conan-default -S . -B build `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install" `
@@ -104,7 +113,10 @@ jobs:
       - name: Build install target
         shell: pwsh
         run: |
-          cmake --build build --config Release --target install
+          $buildCmd = 'cmake --build build --config Release --target install --verbose'
+          Write-Host "Build command:"
+          Write-Host $buildCmd
+          cmake --build build --config Release --target install --verbose
 
       - name: Upload install artifact
         uses: actions/upload-artifact@v7
