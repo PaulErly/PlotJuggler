@@ -44,6 +44,7 @@
 #include "transforms/custom_function.h"
 #include "plotwidget_editor.h"
 #include "plotwidget_transforms.h"
+#include "timeseries_qwt.h"
 
 #include "plotzoomer.h"
 #include "plotmagnifier.h"
@@ -94,60 +95,6 @@ private:
 const double MAX_DOUBLE = std::numeric_limits<double>::max() / 2;
 
 static bool if_xy_plot_failed_show_dialog = true;
-
-class QwtStringTimeseries : public QwtSeriesData<QPointF>
-{
-public:
-  explicit QwtStringTimeseries(const StringSeries* data) : _data(data)
-  {
-  }
-
-  QPointF sample(size_t i) const override
-  {
-    const auto& p = _data->at(i);
-    return QPointF(p.x - _time_offset, static_cast<double>(p.y.index));
-  }
-
-  size_t size() const override
-  {
-    return _data->size();
-  }
-
-  QRectF boundingRect() const override
-  {
-    if (_data->size() == 0)
-    {
-      return {};
-    }
-
-    auto range_x_opt = _data->rangeX();
-    if (!range_x_opt)
-    {
-      return {};
-    }
-    auto range_x = range_x_opt.value();
-
-    double min_y = std::numeric_limits<double>::max();
-    double max_y = std::numeric_limits<double>::lowest();
-    for (size_t i = 0; i < _data->size(); i++)
-    {
-      const auto y = static_cast<double>(_data->at(i).y.index);
-      min_y = std::min(min_y, y);
-      max_y = std::max(max_y, y);
-    }
-    return QRectF(QPointF(range_x.min - _time_offset, max_y),
-                  QPointF(range_x.max - _time_offset, min_y));
-  }
-
-  void setTimeOffset(double offset)
-  {
-    _time_offset = offset;
-  }
-
-private:
-  const StringSeries* _data;
-  double _time_offset = 0.0;
-};
 
 PlotWidget::PlotWidget(PlotDataMapRef& datamap, QWidget* parent)
   : PlotWidgetBase(parent)
@@ -511,21 +458,11 @@ PlotWidgetBase::CurveInfo* PlotWidget::addCurve(const std::string& name, QColor 
     info = &(curveList().back());
   }
 
-  auto it3 = _mapped_data.strings.find(name);
-  if (it3 != _mapped_data.strings.end())
-  {
-    info = PlotWidgetBase::addCurve(name, it3->second, color);
-  }
-
   if (info && info->curve)
   {
     if (auto series = dynamic_cast<QwtSeriesWrapper*>(info->curve->data()))
     {
       series->setTimeOffset(_time_offset);
-    }
-    else if (auto string_series = dynamic_cast<QwtStringTimeseries*>(info->curve->data()))
-    {
-      string_series->setTimeOffset(_time_offset);
     }
   }
   updateCategoricalAxisLabels();
