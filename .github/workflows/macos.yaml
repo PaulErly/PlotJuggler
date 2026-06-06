@@ -1,13 +1,6 @@
 name: macos
 
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - '[0-9]+.[0-9]+.[0-9]+'
-  pull_request:
-    types: [opened, synchronize]
   workflow_dispatch:
 
 concurrency:
