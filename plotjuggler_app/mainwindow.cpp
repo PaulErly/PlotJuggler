@@ -1209,7 +1209,7 @@ bool MainWindow::loadDatasetFromFile(QString filename)
     primary.label = "[A]";
     primary.source_path = _loaded_datafiles_history.empty() ? tr("Current session") :
                                                              _loaded_datafiles_history.front().filename;
-    primary.prefix = {};
+    primary.prefix = QString();
     primary.time_offset = 0.0;
     primary.comparison_mode = true;
     _comparison_datasets.push_back(primary);
@@ -1301,7 +1301,7 @@ void MainWindow::openCompareLogsDialog()
     primary.label = "[A]";
     primary.source_path = _loaded_datafiles_history.empty() ? tr("Current session") :
                                                              _loaded_datafiles_history.front().filename;
-    primary.prefix = {};
+    primary.prefix = QString();
     primary.time_offset = 0.0;
     primary.comparison_mode = true;
     _comparison_datasets.push_back(primary);
