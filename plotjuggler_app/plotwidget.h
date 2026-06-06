@@ -233,6 +233,8 @@ private:
   QwtSeriesWrapper* createTimeSeries(const PlotData* data,
                                      const QString& transform_ID = {}) override;
 
+  void refreshCurveMetadata();
+
   double _time_offset;
 
   double _tracker_position;
@@ -256,7 +258,6 @@ private:
   void updateCategoricalAxisLabels();
   QString displayCurveName(const std::string& curve_name, const PlotDataBase<double, double>* data) const;
   QString displayCurveName(const std::string& curve_name, const StringSeries* data) const;
-  void refreshCurveMetadata();
 };
 
 #endif
