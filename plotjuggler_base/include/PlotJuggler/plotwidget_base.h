@@ -72,6 +72,9 @@ public:
   virtual CurveInfo* addCurve(const std::string& name, PlotDataXY& src_data,
                               QColor color = Qt::transparent);
 
+  virtual CurveInfo* addCurve(const std::string& name, const StringSeries& src_data,
+                              QColor color = Qt::transparent);
+
   virtual void removeCurve(const QString& title);
 
   const std::list<CurveInfo>& curveList() const;

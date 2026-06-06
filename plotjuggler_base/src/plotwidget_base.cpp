@@ -442,6 +442,38 @@ PlotWidgetBase::CurveInfo* PlotWidgetBase::addCurve(const std::string& name, Plo
   return &(p->curve_list.back());
 }
 
+PlotWidgetBase::CurveInfo* PlotWidgetBase::addCurve(const std::string& name,
+                                                    const StringSeries& data, QColor color)
+{
+  const auto qname = QString::fromStdString(name);
+  if (curveFromTitle(qname))
+  {
+    return nullptr;
+  }
+
+  auto curve = new QwtPlotCurve(qname);
+  curve->setPaintAttribute(QwtPlotCurve::ClipPolygons, true);
+  curve->setPaintAttribute(QwtPlotCurve::FilterPointsAggressive, true);
+  curve->setData(new QwtStringTimeseries(&data));
+
+  if (color == Qt::transparent)
+  {
+    color = getColorHint(nullptr);
+  }
+  curve->setPen(color);
+  setStyle(curve, p->overridden_curve_style.value_or(p->default_curve_style));
+  curve->setRenderHint(QwtPlotItem::RenderAntialiased, true);
+  curve->attach(qwtPlot());
+
+  auto marker = new QwtPlotMarker;
+  marker->attach(qwtPlot());
+  marker->setVisible(false);
+  marker->setSymbol(new QwtSymbol(QwtSymbol::Ellipse, Qt::red, QPen(Qt::black), QSize(8, 8)));
+
+  p->curve_list.push_back({ name, curve, marker });
+  return &(p->curve_list.back());
+}
+
 bool PlotWidgetBase::isEmpty() const
 {
   return p->curve_list.empty();

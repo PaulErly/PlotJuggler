@@ -10,6 +10,7 @@
 #include "qwt_series_data.h"
 #include "PlotJuggler/plotdata.h"
 #include "PlotJuggler/transform_function.h"
+#include <QString>
 
 using namespace PJ;
 
@@ -36,6 +37,22 @@ public:
 
   virtual RangeOpt getVisualizationRangeY(Range range_X);
 
+  virtual void setTimeOffset(double)
+  {
+  }
+
+  virtual QString formatValue(double value, int precision) const;
+
+  virtual std::optional<QPointF> sampleFromTime(double)
+  {
+    return {};
+  }
+
+  virtual bool isCategorical() const
+  {
+    return false;
+  }
+
   virtual void updateCache(bool reset_old_data)
   {
   }
@@ -52,13 +69,13 @@ public:
 
   QRectF boundingRect() const override;
 
-  void setTimeOffset(double offset);
+  void setTimeOffset(double offset) override;
 
   virtual RangeOpt getVisualizationRangeX() override;
 
   virtual RangeOpt getVisualizationRangeY(Range range_X) override;
 
-  virtual std::optional<QPointF> sampleFromTime(double t);
+  std::optional<QPointF> sampleFromTime(double t) override;
 
   void updateCache(bool) override
   {
@@ -66,6 +83,44 @@ public:
 
 protected:
   const PlotData* _ts_data;
+  double _time_offset = 0.0;
+};
+
+//------------------------------------
+
+class QwtStringTimeseries : public QwtSeriesWrapper
+{
+public:
+  QwtStringTimeseries(const StringSeries* data) : QwtSeriesWrapper(nullptr), _data(data)
+  {
+  }
+
+  QPointF sample(size_t i) const override;
+
+  size_t size() const override;
+
+  QRectF boundingRect() const override;
+
+  void setTimeOffset(double offset) override;
+
+  RangeOpt getVisualizationRangeX() override;
+
+  RangeOpt getVisualizationRangeY(Range range_X) override;
+
+  QString formatValue(double value, int precision) const override;
+
+  bool isCategorical() const override
+  {
+    return true;
+  }
+
+  const StringSeries* stringSeries() const
+  {
+    return _data;
+  }
+
+private:
+  const StringSeries* _data;
   double _time_offset = 0.0;
 };
 

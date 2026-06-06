@@ -22,6 +22,7 @@
 #include <QSettings>
 #include <QSvgGenerator>
 #include <QClipboard>
+#include <cmath>
 #include <iostream>
 #include <limits>
 #include <set>
@@ -66,6 +67,28 @@ class TimeScaleDraw : public QwtScaleDraw
     }
     return dt.toString("hh:mm:ss.z\nyyyy MMM dd");
   }
+};
+
+class CategoricalScaleDraw : public QwtScaleDraw
+{
+public:
+  explicit CategoricalScaleDraw(const StringSeries* series) : _series(series)
+  {
+  }
+
+  QwtText label(double value) const override
+  {
+    const auto index = static_cast<uint32_t>(std::llround(value));
+    if (std::abs(value - index) > 0.001)
+    {
+      return {};
+    }
+    const auto text = _series->getString(StringDictIndex(index));
+    return QString::fromUtf8(text.data(), int(text.size()));
+  }
+
+private:
+  const StringSeries* _series;
 };
 
 const double MAX_DOUBLE = std::numeric_limits<double>::max() / 2;
@@ -403,13 +426,20 @@ PlotWidgetBase::CurveInfo* PlotWidget::addCurve(const std::string& name, QColor 
     info = PlotWidgetBase::addCurve(name, it2->second, color);
   }
 
+  auto it3 = _mapped_data.strings.find(name);
+  if (it3 != _mapped_data.strings.end())
+  {
+    info = PlotWidgetBase::addCurve(name, it3->second, color);
+  }
+
   if (info && info->curve)
   {
-    if (auto timeseries = dynamic_cast<QwtTimeseries*>(info->curve->data()))
+    if (auto series = dynamic_cast<QwtSeriesWrapper*>(info->curve->data()))
     {
-      timeseries->setTimeOffset(_time_offset);
+      series->setTimeOffset(_time_offset);
     }
   }
+  updateCategoricalAxisLabels();
   _tracker->redraw();
   _reference_tracker->redraw();
   return info;
@@ -418,6 +448,7 @@ PlotWidgetBase::CurveInfo* PlotWidget::addCurve(const std::string& name, QColor 
 void PlotWidget::removeCurve(const QString& title)
 {
   PlotWidgetBase::removeCurve(title);
+  updateCategoricalAxisLabels();
   _tracker->redraw();
   _reference_tracker->redraw();
 }
@@ -447,6 +478,7 @@ void PlotWidget::onDataSourceRemoved(const std::string& src_name)
 
   if (deleted)
   {
+    updateCategoricalAxisLabels();
     _tracker->redraw();
     _reference_tracker->redraw();
     emit curveListChanged();
@@ -461,6 +493,7 @@ void PlotWidget::onDataSourceRemoved(const std::string& src_name)
 void PlotWidget::removeAllCurves()
 {
   PlotWidgetBase::removeAllCurves();
+  updateCategoricalAxisLabels();
   setModeXY(false);
   _tracker->redraw();
   _reference_tracker->redraw();
@@ -490,7 +523,8 @@ void PlotWidget::onDragEnterEvent(QDragEnterEvent* event)
     {
       _dragging.curves.push_back(curve_name);
     }
-    if (_mapped_data.numeric.count(name) == 0 && _mapped_data.scatter_xy.count(name) == 0)
+    if (_mapped_data.numeric.count(name) == 0 && _mapped_data.scatter_xy.count(name) == 0 &&
+        _mapped_data.strings.count(name) == 0)
     {
       event->ignore();
       return;
@@ -511,6 +545,14 @@ void PlotWidget::onDragEnterEvent(QDragEnterEvent* event)
 
   if (format == "curveslist/new_XY_axis")
   {
+    for (const auto& curve : _dragging.curves)
+    {
+      if (_mapped_data.numeric.count(curve.toStdString()) == 0)
+      {
+        event->ignore();
+        return;
+      }
+    }
     if (_dragging.curves.size() != 2)
     {
       qDebug() << "FATAL: Dragging " << _dragging.curves.size() << " curves";
@@ -816,7 +858,8 @@ bool PlotWidget::xmlLoadState(QDomElement& plot_widget, bool autozoom)
     //-----------------
     if (is_timeseries || is_scatter_xy)
     {
-      if ((is_timeseries && _mapped_data.numeric.count(curve_name_std) == 0) ||
+      if ((is_timeseries && _mapped_data.numeric.count(curve_name_std) == 0 &&
+           _mapped_data.strings.count(curve_name_std) == 0) ||
           (!is_timeseries && _mapped_data.scatter_xy.count(curve_name_std) == 0))
       {
         missing_curves.append(curve_name);
@@ -887,6 +930,7 @@ bool PlotWidget::xmlLoadState(QDomElement& plot_widget, bool autozoom)
   }
 
   emit curveListChanged();
+  updateCategoricalAxisLabels();
 
   //-----------------------------------------
 
@@ -1100,7 +1144,7 @@ void PlotWidget::setTrackerPosition(double abs_time)
   {
     for (auto& it : curveList())
     {
-      if (auto series = dynamic_cast<QwtTimeseries*>(it.curve->data()))
+      if (auto series = dynamic_cast<QwtSeriesWrapper*>(it.curve->data()))
       {
         auto pointXY = series->sampleFromTime(abs_time);
         if (pointXY)
@@ -1133,7 +1177,7 @@ void PlotWidget::on_changeTimeOffset(double offset)
   {
     for (auto& it : curveList())
     {
-      if (auto series = dynamic_cast<QwtTimeseries*>(it.curve->data()))
+      if (auto series = dynamic_cast<QwtSeriesWrapper*>(it.curve->data()))
       {
         series->setTimeOffset(_time_offset);
       }
@@ -1617,11 +1661,15 @@ void PlotWidget::showPointValues(QPoint point)
         _show_point_marker->setValue(maybe_point.value());
         marker_point = maybe_point.value();
 
+        const auto series = dynamic_cast<const QwtSeriesWrapper*>(curve->data());
+        const QString value_text =
+            series ? series->formatValue(maybe_point->y(), prec) :
+                     QString::number(maybe_point->y(), 'f', prec);
         text = QString("<font color=%1>name: %2<br>time:%3<br>value: %4</font>")
                    .arg(curve->pen().color().name())
                    .arg(curve->title().text())
                    .arg(QString::number(maybe_point->x(), 'f', prec))
-                   .arg(QString::number(maybe_point->y(), 'f', prec));
+                   .arg(value_text);
       }
     }
   }
@@ -1744,6 +1792,11 @@ bool PlotWidget::canvasEventFilter(QEvent* event)
           emit trackerMoved(pointF);
           return true;  // don't pass to canvas().
         }
+        if (mouse_event->modifiers() == Qt::NoModifier)
+        {
+          _tracker_click_pending = true;
+          _tracker_click_position = press_point;
+        }
         return false;  // send to canvas()
       }
       else if (mouse_event->buttons() == Qt::MiddleButton &&
@@ -1770,6 +1823,11 @@ bool PlotWidget::canvasEventFilter(QEvent* event)
 
       QMouseEvent* mouse_event = static_cast<QMouseEvent*>(event);
       const QPoint point = mouse_event->pos();
+      if (_tracker_click_pending &&
+          (point - _tracker_click_position).manhattanLength() >= QApplication::startDragDistance())
+      {
+        _tracker_click_pending = false;
+      }
       QPointF pointF(qwtPlot()->invTransform(QwtPlot::xBottom, point.x()),
                      qwtPlot()->invTransform(QwtPlot::yLeft, point.y()));
 
@@ -1785,9 +1843,24 @@ bool PlotWidget::canvasEventFilter(QEvent* event)
     case QEvent::Leave: {
       _dragging.mode = DragInfo::NONE;
       _dragging.curves.clear();
+      _tracker_click_pending = false;
     }
     break;
     case QEvent::MouseButtonRelease: {
+      QMouseEvent* mouse_event = static_cast<QMouseEvent*>(event);
+      if (_tracker_click_pending && mouse_event->button() == Qt::LeftButton &&
+          mouse_event->modifiers() == Qt::NoModifier)
+      {
+        const QPoint point = mouse_event->pos();
+        QPointF pointF(qwtPlot()->invTransform(QwtPlot::xBottom, point.x()),
+                       qwtPlot()->invTransform(QwtPlot::yLeft, point.y()));
+        _tracker_click_pending = false;
+        emit trackerMoved(pointF);
+      }
+      if (mouse_event->button() == Qt::LeftButton)
+      {
+        _tracker_click_pending = false;
+      }
       if (_dragging.mode == DragInfo::NONE)
       {
         return false;
@@ -1815,6 +1888,15 @@ void PlotWidget::setDefaultRangeX()
         double B = data.back().x;
         min = std::min(A, min);
         max = std::max(B, max);
+      }
+    }
+    for (auto& it : _mapped_data.strings)
+    {
+      const StringSeries& data = it.second;
+      if (data.size() > 0)
+      {
+        min = std::min(data.front().x, min);
+        max = std::max(data.back().x, max);
       }
     }
     setAxisScale(QwtPlot::xBottom, min - _time_offset, max - _time_offset);
@@ -1859,4 +1941,29 @@ QwtSeriesWrapper* PlotWidget::createTimeSeries(const PlotData* data, const QStri
   output->setTimeOffset(_time_offset);
   output->updateCache(true);
   return output;
+}
+
+void PlotWidget::updateCategoricalAxisLabels()
+{
+  const StringSeries* categorical_series = nullptr;
+  for (const auto& info : curveList())
+  {
+    auto series = dynamic_cast<const QwtStringTimeseries*>(info.curve->data());
+    if (!series || categorical_series)
+    {
+      categorical_series = nullptr;
+      qwtPlot()->setAxisScaleDraw(QwtPlot::yLeft, new QwtScaleDraw);
+      return;
+    }
+    categorical_series = series->stringSeries();
+  }
+
+  if (categorical_series)
+  {
+    qwtPlot()->setAxisScaleDraw(QwtPlot::yLeft, new CategoricalScaleDraw(categorical_series));
+  }
+  else
+  {
+    qwtPlot()->setAxisScaleDraw(QwtPlot::yLeft, new QwtScaleDraw);
+  }
 }

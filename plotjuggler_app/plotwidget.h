@@ -237,6 +237,9 @@ private:
 
   double _tracker_position;
 
+  bool _tracker_click_pending = false;
+  QPoint _tracker_click_position;
+
   Range _custom_Y_limits;
 
   TransformSelector* _transform_select_dialog;
@@ -249,6 +252,8 @@ private:
   void rescaleEqualAxisScaling();
 
   void setAxisScale(QwtAxisId axisId, double min, double max);
+
+  void updateCategoricalAxisLabels();
 };
 
 #endif
