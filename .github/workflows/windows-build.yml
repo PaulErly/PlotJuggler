@@ -25,6 +25,30 @@ jobs:
         with:
           cache_packages: false
 
+      - name: Detect Conan cache location
+        shell: pwsh
+        run: |
+          $version = conan --version
+          Write-Host $version
+          if ($version -match 'Conan version\s+(\d+)') {
+            "CONAN_MAJOR=$($Matches[1])" | Out-File -FilePath $env:GITHUB_ENV -Append
+          } else {
+            Write-Error "Unable to parse Conan version: $version"
+            exit 1
+          }
+
+      - name: Cache Conan packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.conan
+            ~/.conan2
+          key: >-
+            ${{ runner.os }}-conan${{ env.CONAN_MAJOR }}-${{ hashFiles('conanfile.txt', 'conanfile.py', 'conandata.yml', 'CMakeLists.txt', 'plotjuggler_app/CMakeLists.txt', 'plotjuggler_plugins/CMakeLists.txt', 'cmake/**/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-conan${{ env.CONAN_MAJOR }}-
+            ${{ runner.os }}-conan-
+
       - name: Install Qt 5.15.2
         uses: jurplel/install-qt-action@v4
         with:
@@ -48,6 +72,34 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install" `
             -DPJ_INSTALLATION="windows" `
             -DPJ_PLUGINS_DIRECTORY="bin"
+
+      - name: Print build diagnostics
+        shell: pwsh
+        run: |
+          Write-Host "Runner OS: $env:RUNNER_OS"
+          cmake --version
+          conan --version
+          $vcvars = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          if (-not (Test-Path $vcvars)) {
+            $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+            $vsRoot = & $vswhere -latest -products * -property installationPath
+            if ($vsRoot) {
+              $vcvars = Join-Path $vsRoot "VC\Auxiliary\Build\vcvars64.bat"
+            }
+          }
+          if (Test-Path $vcvars) {
+            cmd /c "call `"$vcvars`" >nul && where cl && cl"
+          } else {
+            Write-Host "vcvars64.bat not found"
+          }
+          if (Get-Command qmake -ErrorAction SilentlyContinue) {
+            qmake -query QT_INSTALL_PREFIX
+          } else {
+            Write-Host "qmake not found on PATH"
+          }
+          if (Test-Path build\CMakeCache.txt) {
+            Select-String -Path build\CMakeCache.txt -Pattern '^CMAKE_GENERATOR:'
+          }
 
       - name: Build install target
         shell: pwsh

@@ -2,14 +2,6 @@ name: ubuntu
 
 on:
   workflow_dispatch:        # lets us trigger an AppImage build from any branch via the Actions UI
-  push:
-    branches:
-      - main
-    tags:
-      - '[0-9]+.[0-9]+.[0-9]+'
-
-  pull_request:
-    types: [opened, synchronize]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
