@@ -181,12 +181,18 @@ jobs:
       - name: Print MSVC diagnostics
         shell: pwsh
         run: |
-          where.exe cl
-          cl
+          Write-Host "Runner OS: $env:RUNNER_OS"
+          $cl = Get-Command cl.exe -ErrorAction SilentlyContinue
+          if ($cl) {
+            Write-Host "cl.exe: $($cl.Source)"
+            cl
+          } else {
+            Write-Host "cl.exe not available in the current shell"
+          }
           where.exe cmake
           cmake --version
           conan profile detect --force
-          conan profile show
+          conan profile show -pr default
 
       - name: Conan install
         shell: pwsh
