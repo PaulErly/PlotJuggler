@@ -92,6 +92,40 @@ private:
   const StringSeries* _series;
 };
 
+namespace
+{
+QString datasetPrefixedName(const QString& curve_name, const QVariant& dataset_label)
+{
+  if (!dataset_label.isValid())
+  {
+    return curve_name;
+  }
+
+  const QString label = dataset_label.toString().trimmed();
+  if (label.isEmpty())
+  {
+    return curve_name;
+  }
+
+  if (curve_name.startsWith(label + "/"))
+  {
+    return curve_name;
+  }
+
+  if (curve_name.startsWith('/'))
+  {
+    return label + curve_name;
+  }
+  return label + "/" + curve_name;
+}
+
+template <typename SeriesT>
+double combinedTimeOffset(const SeriesT& series, double plot_offset)
+{
+  return plot_offset + series.attribute(PJ::DATASET_TIME_OFFSET).toDouble();
+}
+}  // namespace
+
 const double MAX_DOUBLE = std::numeric_limits<double>::max() / 2;
 
 static bool if_xy_plot_failed_show_dialog = true;
@@ -420,17 +454,25 @@ PlotWidgetBase::CurveInfo* PlotWidget::addCurve(const std::string& name, QColor 
   if (it1 != _mapped_data.numeric.end())
   {
     info = PlotWidgetBase::addCurve(name, it1->second, color);
+    if (info && info->curve)
+    {
+      info->curve->setTitle(displayCurveName(name, &it1->second));
+    }
   }
 
   auto it2 = _mapped_data.scatter_xy.find(name);
   if (it2 != _mapped_data.scatter_xy.end())
   {
     info = PlotWidgetBase::addCurve(name, it2->second, color);
+    if (info && info->curve)
+    {
+      info->curve->setTitle(displayCurveName(name, &it2->second));
+    }
   }
   auto it3 = _mapped_data.strings.find(name);
   if (it3 != _mapped_data.strings.end())
   {
-    auto curve = new QwtPlotCurve(QString::fromStdString(name));
+    auto curve = new QwtPlotCurve(displayCurveName(name, &it3->second));
     auto plot_qwt = new QwtStringTimeseries(&it3->second);
     curve->setPaintAttribute(QwtPlotCurve::ClipPolygons, true);
     curve->setPaintAttribute(QwtPlotCurve::FilterPointsAggressive, true);
@@ -456,19 +498,44 @@ PlotWidgetBase::CurveInfo* PlotWidget::addCurve(const std::string& name, QColor 
     curve_info.src_name = name;
     curveList().push_back(curve_info);
     info = &(curveList().back());
+    if (auto series = dynamic_cast<QwtSeriesWrapper*>(info->curve->data()))
+    {
+      series->setTimeOffset(combinedTimeOffset(it3->second, _time_offset));
+    }
   }
 
   if (info && info->curve)
   {
     if (auto series = dynamic_cast<QwtSeriesWrapper*>(info->curve->data()))
     {
-      series->setTimeOffset(_time_offset);
+      if (auto data_it = _mapped_data.numeric.find(name); data_it != _mapped_data.numeric.end())
+      {
+        series->setTimeOffset(combinedTimeOffset(data_it->second, _time_offset));
+      }
+      else if (auto xy_it = _mapped_data.scatter_xy.find(name); xy_it != _mapped_data.scatter_xy.end())
+      {
+        series->setTimeOffset(combinedTimeOffset(xy_it->second, _time_offset));
+      }
     }
   }
   updateCategoricalAxisLabels();
   _tracker->redraw();
   _reference_tracker->redraw();
   return info;
+}
+
+QString PlotWidget::displayCurveName(const std::string& curve_name,
+                                     const PlotDataBase<double, double>* data) const
+{
+  return datasetPrefixedName(QString::fromStdString(curve_name),
+                             data ? data->attribute(PJ::DATASET_LABEL) : QVariant());
+}
+
+QString PlotWidget::displayCurveName(const std::string& curve_name,
+                                     const StringSeries* data) const
+{
+  return datasetPrefixedName(QString::fromStdString(curve_name),
+                             data ? data->attribute(PJ::DATASET_LABEL) : QVariant());
 }
 
 void PlotWidget::removeCurve(const QString& title)
@@ -1125,6 +1192,31 @@ void PlotWidget::reloadPlotData()
       {
         ts->updateCache(true);
       }
+      it.curve->setTitle(displayCurveName(curve_name, &data_it->second));
+      if (auto series = dynamic_cast<QwtSeriesWrapper*>(it.curve->data()))
+      {
+        series->setTimeOffset(combinedTimeOffset(data_it->second, _time_offset));
+      }
+      continue;
+    }
+    auto xy_it = _mapped_data.scatter_xy.find(curve_name);
+    if (xy_it != _mapped_data.scatter_xy.end())
+    {
+      it.curve->setTitle(displayCurveName(curve_name, &xy_it->second));
+      if (auto series = dynamic_cast<QwtSeriesWrapper*>(it.curve->data()))
+      {
+        series->setTimeOffset(combinedTimeOffset(xy_it->second, _time_offset));
+      }
+      continue;
+    }
+    auto str_it = _mapped_data.strings.find(curve_name);
+    if (str_it != _mapped_data.strings.end())
+    {
+      it.curve->setTitle(displayCurveName(curve_name, &str_it->second));
+      if (auto series = dynamic_cast<QwtSeriesWrapper*>(it.curve->data()))
+      {
+        series->setTimeOffset(combinedTimeOffset(str_it->second, _time_offset));
+      }
     }
   }
 
@@ -1132,6 +1224,41 @@ void PlotWidget::reloadPlotData()
   {
     setDefaultRangeX();
   }
+}
+
+void PlotWidget::refreshCurveMetadata()
+{
+  for (auto& it : curveList())
+  {
+    const auto& curve_name = it.src_name;
+    if (auto num_it = _mapped_data.numeric.find(curve_name); num_it != _mapped_data.numeric.end())
+    {
+      it.curve->setTitle(displayCurveName(curve_name, &num_it->second));
+      if (auto series = dynamic_cast<QwtSeriesWrapper*>(it.curve->data()))
+      {
+        series->setTimeOffset(combinedTimeOffset(num_it->second, _time_offset));
+      }
+    }
+    else if (auto xy_it = _mapped_data.scatter_xy.find(curve_name);
+             xy_it != _mapped_data.scatter_xy.end())
+    {
+      it.curve->setTitle(displayCurveName(curve_name, &xy_it->second));
+      if (auto series = dynamic_cast<QwtSeriesWrapper*>(it.curve->data()))
+      {
+        series->setTimeOffset(combinedTimeOffset(xy_it->second, _time_offset));
+      }
+    }
+    else if (auto str_it = _mapped_data.strings.find(curve_name);
+             str_it != _mapped_data.strings.end())
+    {
+      it.curve->setTitle(displayCurveName(curve_name, &str_it->second));
+      if (auto series = dynamic_cast<QwtSeriesWrapper*>(it.curve->data()))
+      {
+        series->setTimeOffset(combinedTimeOffset(str_it->second, _time_offset));
+      }
+    }
+  }
+  updateCategoricalAxisLabels();
 }
 
 void PlotWidget::activateLegend(bool activate)
@@ -1200,11 +1327,28 @@ void PlotWidget::on_changeTimeOffset(double offset)
 
   if (fabs(prev_offset - offset) > std::numeric_limits<double>::epsilon())
   {
+    auto applyOffset = [this](const std::string& name, QwtSeriesWrapper* series) {
+      if (auto num_it = _mapped_data.numeric.find(name); num_it != _mapped_data.numeric.end())
+      {
+        series->setTimeOffset(combinedTimeOffset(num_it->second, _time_offset));
+        return;
+      }
+      if (auto xy_it = _mapped_data.scatter_xy.find(name); xy_it != _mapped_data.scatter_xy.end())
+      {
+        series->setTimeOffset(combinedTimeOffset(xy_it->second, _time_offset));
+        return;
+      }
+      if (auto str_it = _mapped_data.strings.find(name); str_it != _mapped_data.strings.end())
+      {
+        series->setTimeOffset(combinedTimeOffset(str_it->second, _time_offset));
+      }
+    };
+
     for (auto& it : curveList())
     {
       if (auto series = dynamic_cast<QwtSeriesWrapper*>(it.curve->data()))
       {
-        series->setTimeOffset(_time_offset);
+        applyOffset(it.src_name, series);
       }
     }
     if (!isXYPlot() && !curveList().empty())

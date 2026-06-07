@@ -34,6 +34,28 @@ bool isCurveTreeItem(const QTreeWidgetItem* item)
   return item && !item->data(0, CustomRoles::Name).toString().isEmpty() &&
          item->flags().testFlag(Qt::ItemIsSelectable);
 }
+
+QString datasetPrefixedTreeName(const QString& name, const QVariant& dataset_label)
+{
+  if (!dataset_label.isValid())
+  {
+    return name;
+  }
+  const QString label = dataset_label.toString().trimmed();
+  if (label.isEmpty())
+  {
+    return name;
+  }
+  if (name.startsWith(label + "/"))
+  {
+    return name;
+  }
+  if (name.startsWith('/'))
+  {
+    return label + name;
+  }
+  return label + "/" + name;
+}
 }  // namespace
 
 //-------------------------------------------------
@@ -131,7 +153,22 @@ bool CurveListPanel::addCurve(const std::string& plot_name)
     return false;
   }
 
-  _tree_view->addItem(group_name, getTreeName(plot_id), plot_id);
+  QVariant dataset_label;
+  if (auto it = _plot_data.numeric.find(plot_name); it != _plot_data.numeric.end())
+  {
+    dataset_label = it->second.attribute(PJ::DATASET_LABEL);
+  }
+  else if (auto it = _plot_data.strings.find(plot_name); it != _plot_data.strings.end())
+  {
+    dataset_label = it->second.attribute(PJ::DATASET_LABEL);
+  }
+  else if (auto it = _plot_data.scatter_xy.find(plot_name); it != _plot_data.scatter_xy.end())
+  {
+    dataset_label = it->second.attribute(PJ::DATASET_LABEL);
+  }
+
+  _tree_view->addItem(group_name, getTreeName(datasetPrefixedTreeName(plot_id, dataset_label)),
+                      plot_id);
   _tree_view_items.insert(plot_name);
 
   _column_width_dirty = true;
@@ -314,12 +351,26 @@ void CurveListPanel::refreshValues()
   };
 
   auto GetValue = [&](const std::string& name) -> QString {
+    auto adjusted_time = [this, &name]() -> double {
+      auto offset_from = [&](auto& plot_data) {
+        auto it = plot_data.find(name);
+        if (it != plot_data.end())
+        {
+          return it->second.attribute(PJ::DATASET_TIME_OFFSET).toDouble();
+        }
+        return 0.0;
+      };
+      return _tracker_time -
+             (offset_from(_plot_data.numeric) + offset_from(_plot_data.strings) +
+              offset_from(_plot_data.scatter_xy));
+    };
+
     {
       auto it = _plot_data.numeric.find(name);
       if (it != _plot_data.numeric.end())
       {
         auto& plot_data = it->second;
-        auto val = plot_data.getYfromX(_tracker_time);
+        auto val = plot_data.getYfromX(adjusted_time());
         if (val)
         {
           return FormattedNumber(val.value());
@@ -332,7 +383,7 @@ void CurveListPanel::refreshValues()
       if (it != _plot_data.strings.end())
       {
         auto& plot_data = it->second;
-        auto str = plot_data.getStringFromX(_tracker_time);
+        auto str = plot_data.getStringFromX(adjusted_time());
         if (str)
         {
           char last_byte = str->data()[str->size() - 1];

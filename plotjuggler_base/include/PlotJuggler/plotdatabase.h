@@ -52,7 +52,19 @@ enum PlotAttribute
 
   // Color of the curve in the plot.
   // Type: QColor
-  COLOR_HINT
+  COLOR_HINT,
+
+  // Dataset label used for compare-log overlays, e.g. "[A]".
+  // Type: QString
+  DATASET_LABEL,
+
+  // Source path for the dataset.
+  // Type: QString
+  DATASET_SOURCE,
+
+  // Time offset in seconds applied to the dataset when plotted.
+  // Type: double
+  DATASET_TIME_OFFSET
 };
 
 using Attributes = std::unordered_map<PlotAttribute, QVariant>;
@@ -68,6 +80,11 @@ inline bool CheckType(PlotAttribute attr, const QVariant& value)
       return value.type() == QVariant::Bool;
     case TOOL_TIP:
       return value.type() == QVariant::String;
+    case DATASET_LABEL:
+    case DATASET_SOURCE:
+      return value.type() == QVariant::String;
+    case DATASET_TIME_OFFSET:
+      return value.type() == QVariant::Double;
   }
   return false;
 }

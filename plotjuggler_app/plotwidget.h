@@ -85,6 +85,8 @@ public:
 
   void changeDots(bool force_dots);
 
+  void refreshCurveMetadata();
+
 protected:
   PlotDataMapRef& _mapped_data;
 
@@ -254,6 +256,8 @@ private:
   void setAxisScale(QwtAxisId axisId, double min, double max);
 
   void updateCategoricalAxisLabels();
+  QString displayCurveName(const std::string& curve_name, const PlotDataBase<double, double>* data) const;
+  QString displayCurveName(const std::string& curve_name, const StringSeries* data) const;
 };
 
 #endif
