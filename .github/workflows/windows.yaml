@@ -178,6 +178,16 @@ jobs:
           tools: 'tools_ifw'
           add-tools-to-path: 'true'
 
+      - name: Print MSVC diagnostics
+        shell: pwsh
+        run: |
+          where.exe cl
+          cl
+          where.exe cmake
+          cmake --version
+          conan profile detect --force
+          conan profile show
+
       - name: Conan install
         shell: pwsh
         run: |
