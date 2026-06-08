@@ -1317,7 +1317,7 @@
                     </size>
                    </property>
                    <property name="toolTip">
-                    <string>Show point in plot</string>
+                    <string>Show points in plot</string>
                    </property>
                    <property name="text">
                     <string/>
