@@ -9,6 +9,7 @@
 
 #include <map>
 #include <deque>
+#include <vector>
 #include <QObject>
 #include <QTextEdit>
 #include <QDomDocument>
@@ -168,6 +169,8 @@ private slots:
   void on_pasteAction_triggered();
 
   void showPointValues(QPoint point);
+  void clearNearestDataPoint(QPoint point);
+  void clearAllDataPoints();
 
 private slots:
 
@@ -190,6 +193,8 @@ private:
   QAction* _action_copy;
   QAction* _action_paste;
   QAction* _action_image_to_clipboard;
+  QAction* _action_clear_data_point;
+  QAction* _action_clear_all_data_points;
 
   QAction* _flip_x;
   QAction* _flip_y;
@@ -201,6 +206,18 @@ private:
   bool _show_point_enabled = false;
   QwtPlotMarker* _show_point_marker;
   QwtPlotMarker* _show_point_text;
+
+  struct DataPointMarker
+  {
+    double time = 0.0;
+    double y = 0.0;
+    QColor color;
+    QwtPlotMarker* line_marker = nullptr;
+    QwtPlotMarker* point_marker = nullptr;
+  };
+
+  std::vector<DataPointMarker> _data_point_markers;
+  QPoint _last_context_menu_pos;
 
   QString _statistics_window_title = "";
 
@@ -258,6 +275,10 @@ private:
   void updateCategoricalAxisLabels();
   QString displayCurveName(const std::string& curve_name, const PlotDataBase<double, double>* data) const;
   QString displayCurveName(const std::string& curve_name, const StringSeries* data) const;
+  int hitTestDataPointMarker(const QPoint& point) const;
+  void removeDataPointMarker(int index);
+  void addDataPointMarker(const QPointF& point, const QString& text, const QColor& color);
+  void refreshDataPointMarkers();
 };
 
 #endif

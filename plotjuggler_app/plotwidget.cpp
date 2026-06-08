@@ -94,6 +94,16 @@ private:
 
 namespace
 {
+struct PointReadoutLine
+{
+  QColor color;
+  QString value;
+  QString delta;
+  QString name;
+  double y = 0.0;
+  QPointF point;
+};
+
 QString datasetPrefixedName(const QString& curve_name, const QVariant& dataset_label)
 {
   if (!dataset_label.isValid())
@@ -123,6 +133,98 @@ template <typename SeriesT>
 double combinedTimeOffset(const SeriesT& series, double plot_offset)
 {
   return plot_offset + series.attribute(PJ::DATASET_TIME_OFFSET).toDouble();
+}
+
+std::vector<PointReadoutLine> collectPointReadoutLines(const std::list<PJ::PlotWidgetBase::CurveInfo>& curves,
+                                                       double x, int prec, double reference_x,
+                                                       bool has_reference_x)
+{
+  std::vector<PointReadoutLine> lines;
+  lines.reserve(curves.size());
+
+  for (const auto& info : curves)
+  {
+    if (!info.curve->isVisible())
+    {
+      continue;
+    }
+
+    const auto maybe_point = curvePointAt(info.curve, x);
+    if (!maybe_point)
+    {
+      continue;
+    }
+
+    PointReadoutLine line;
+    line.color = info.curve->pen().color();
+    line.name = info.curve->title().text();
+    line.y = maybe_point->y();
+    line.point = maybe_point.value();
+
+    const auto series = dynamic_cast<const QwtSeriesWrapper*>(info.curve->data());
+    line.value = series ? series->formatValue(line.y, prec) : QString::number(line.y, 'f', prec);
+    if (has_reference_x && series && !series->isCategorical())
+    {
+      const auto ref_point = curvePointAt(info.curve, reference_x);
+      if (ref_point)
+      {
+        const auto delta_str = QString::number(line.y - ref_point->y(), 'f', prec);
+        line.delta = QString(" (Δ %1)").arg(delta_str);
+      }
+    }
+    lines.push_back(std::move(line));
+  }
+
+  std::sort(lines.begin(), lines.end(), [](const PointReadoutLine& lhs, const PointReadoutLine& rhs) {
+    return lhs.y < rhs.y;
+  });
+
+  return lines;
+}
+
+QString buildPointReadoutText(double x, const std::vector<PointReadoutLine>& lines, int prec,
+                              const QColor& text_color, std::optional<double> reference_x)
+{
+  Q_UNUSED(reference_x);
+  QString text = QString("<font color=%1>time : %2</font><br>")
+                     .arg(text_color.name())
+                     .arg(QString::number(x, 'f', prec));
+
+  if (!lines.empty())
+  {
+    int value_char_count = 0;
+    int delta_char_count = 0;
+    for (const auto& line : lines)
+    {
+      value_char_count = std::max(value_char_count, line.value.length());
+      delta_char_count = std::max(delta_char_count, line.delta.length());
+    }
+
+    for (const auto& line : lines)
+    {
+      QString value = line.value;
+      QString delta = line.delta;
+      while (value.length() < value_char_count)
+      {
+        value.prepend("&nbsp;");
+      }
+      while (delta.length() < delta_char_count)
+      {
+        delta.prepend("&nbsp;");
+      }
+      text += QString("<font color=%1>%2%3 : %4</font><br>")
+                  .arg(line.color.name())
+                  .arg(value)
+                  .arg(delta)
+                  .arg(line.name);
+    }
+  }
+
+  if (text.endsWith("<br>"))
+  {
+    text.chop(4);
+  }
+  return text;
 }
 }  // namespace
 
@@ -272,6 +374,16 @@ void PlotWidget::buildActions()
   _action_image_to_clipboard = new QAction("&Copy image to clipboard", this);
   connect(_action_image_to_clipboard, &QAction::triggered, this, &PlotWidget::on_copyToClipboard);
 
+  _action_clear_data_point = new QAction("&Clear Data Point", this);
+  connect(_action_clear_data_point, &QAction::triggered, this, [this]() {
+    clearNearestDataPoint(_last_context_menu_pos);
+  });
+
+  _action_clear_all_data_points = new QAction("&Clear All Data Points", this);
+  connect(_action_clear_all_data_points, &QAction::triggered, this, [this]() {
+    clearAllDataPoints();
+  });
+
   _flip_x = new QAction("&Flip Horizontal Axis", this);
   _flip_x->setCheckable(true);
   connect(_flip_x, &QAction::changed, this, &PlotWidget::onFlipAxis);
@@ -290,6 +402,8 @@ void PlotWidget::canvasContextMenuTriggered(const QPoint& pos)
   {
     return;
   }
+
+  _last_context_menu_pos = pos;
 
   QSettings settings;
   QString theme = settings.value("StyleSheet::theme", "light").toString();
@@ -332,7 +446,12 @@ void PlotWidget::canvasContextMenuTriggered(const QPoint& pos)
   menu.addAction(_action_image_to_clipboard);
   menu.addAction(_action_saveToFile);
   menu.addAction(_action_data_statistics);
-
+  if (!_data_point_markers.empty())
+  {
+    menu.addSeparator();
+    menu.addAction(_action_clear_data_point);
+    menu.addAction(_action_clear_all_data_points);
+  }
   // check the clipboard
   QClipboard* clipboard = QGuiApplication::clipboard();
   QString clipboard_text = clipboard->text();
@@ -345,6 +464,8 @@ void PlotWidget::canvasContextMenuTriggered(const QPoint& pos)
 
   _action_removeAllCurves->setEnabled(!curveList().empty());
   _action_formula->setEnabled(!curveList().empty() && !isXYPlot());
+  _action_clear_data_point->setEnabled(!_data_point_markers.empty());
+  _action_clear_all_data_points->setEnabled(!_data_point_markers.empty());
 
   menu.exec(qwtPlot()->canvas()->mapToGlobal(pos));
 }
@@ -1712,6 +1833,139 @@ void PlotWidget::plotOn(const PlotSaveHelper& plot_save_helper, QRect paint_at)
   }
 }
 
+int PlotWidget::hitTestDataPointMarker(const QPoint& point) const
+{
+  const int threshold = QApplication::startDragDistance();
+  int best_index = -1;
+  int best_distance = std::numeric_limits<int>::max();
+
+  for (int i = 0; i < static_cast<int>(_data_point_markers.size()); i++)
+  {
+    const double marker_x = qwtPlot()->transform(QwtPlot::xBottom, _data_point_markers[i].time);
+    const int distance = std::abs(int(std::round(marker_x)) - point.x());
+    if (distance < best_distance)
+    {
+      best_distance = distance;
+      best_index = i;
+    }
+  }
+
+  if (best_distance <= threshold)
+  {
+    return best_index;
+  }
+  return -1;
+}
+
+void PlotWidget::removeDataPointMarker(int index)
+{
+  if (index < 0 || index >= static_cast<int>(_data_point_markers.size()))
+  {
+    return;
+  }
+
+  _data_point_markers[index].line_marker->detach();
+  delete _data_point_markers[index].line_marker;
+  _data_point_markers[index].point_marker->detach();
+  delete _data_point_markers[index].point_marker;
+  _data_point_markers.erase(_data_point_markers.begin() + index);
+  refreshDataPointMarkers();
+  replot();
+}
+
+void PlotWidget::addDataPointMarker(const QPointF& point, const QString& text, const QColor& color)
+{
+  const auto y_scale = qwtPlot()->axisScaleDiv(QwtPlot::yLeft);
+  const double y_mid = 0.5 * (y_scale.lowerBound() + y_scale.upperBound());
+  const Qt::Alignment label_alignment =
+      point.y() < y_mid ? (Qt::AlignRight | Qt::AlignTop) : (Qt::AlignRight | Qt::AlignBottom);
+
+  auto* line_marker = new QwtPlotMarker();
+  line_marker->attach(qwtPlot());
+  line_marker->setLineStyle(QwtPlotMarker::VLine);
+  line_marker->setLinePen(QPen(color, 1.5));
+  line_marker->setXValue(point.x());
+  line_marker->setYValue(point.y());
+  line_marker->setVisible(true);
+
+  auto* point_marker = new QwtPlotMarker();
+  point_marker->attach(qwtPlot());
+  point_marker->setLineStyle(QwtPlotMarker::NoLine);
+  point_marker->setSymbol(new QwtSymbol(QwtSymbol::Ellipse, color, QPen(Qt::black), QSize(5, 5)));
+  point_marker->setXValue(point.x());
+  point_marker->setYValue(point.y());
+  point_marker->setLabel(QwtText(text));
+  point_marker->setLabelAlignment(label_alignment);
+  point_marker->setSpacing(4);
+  point_marker->setVisible(true);
+
+  _data_point_markers.push_back({ point.x(), point.y(), color, line_marker, point_marker });
+  refreshDataPointMarkers();
+  replot();
+}
+
+void PlotWidget::refreshDataPointMarkers()
+{
+  if (_data_point_markers.empty())
+  {
+    return;
+  }
+
+  QSettings settings;
+  const int prec = settings.value("Preferences::precision", 3).toInt();
+  const QColor text_color = qwtPlot()->palette().color(QPalette::WindowText);
+  const auto y_scale = qwtPlot()->axisScaleDiv(QwtPlot::yLeft);
+  const double y_mid = 0.5 * (y_scale.lowerBound() + y_scale.upperBound());
+
+  for (auto& data_point : _data_point_markers)
+  {
+    const auto lines = collectPointReadoutLines(curveList(), data_point.time, prec, 0.0, false);
+    const QString text = buildPointReadoutText(data_point.time, lines, prec, text_color, std::nullopt);
+    const Qt::Alignment label_alignment =
+        data_point.y < y_mid ? (Qt::AlignRight | Qt::AlignTop) : (Qt::AlignRight | Qt::AlignBottom);
+    data_point.line_marker->setLinePen(QPen(data_point.color, 1.5));
+    data_point.line_marker->setXValue(data_point.time);
+    data_point.line_marker->setYValue(data_point.y);
+    data_point.line_marker->setVisible(true);
+
+    data_point.point_marker->setLabel(QwtText(text));
+    data_point.point_marker->setLabelAlignment(label_alignment);
+    data_point.point_marker->setSpacing(4);
+    if (!data_point.point_marker->symbol())
+    {
+      data_point.point_marker->setSymbol(
+          new QwtSymbol(QwtSymbol::Ellipse, data_point.color, QPen(Qt::black), QSize(5, 5)));
+    }
+    data_point.point_marker->setSymbol(
+        new QwtSymbol(QwtSymbol::Ellipse, data_point.color, QPen(Qt::black), QSize(5, 5)));
+    data_point.point_marker->setXValue(data_point.time);
+    data_point.point_marker->setYValue(data_point.y);
+    data_point.point_marker->setVisible(true);
+  }
+}
+
+void PlotWidget::clearNearestDataPoint(QPoint point)
+{
+  const int index = hitTestDataPointMarker(point);
+  if (index >= 0)
+  {
+    removeDataPointMarker(index);
+  }
+}
+
+void PlotWidget::clearAllDataPoints()
+{
+  for (auto& data_point : _data_point_markers)
+  {
+    data_point.line_marker->detach();
+    delete data_point.line_marker;
+    data_point.point_marker->detach();
+    delete data_point.point_marker;
+  }
+  _data_point_markers.clear();
+  replot();
+}
+
 void PlotWidget::setCustomAxisLimits(Range range)
 {
   _custom_Y_limits = range;
@@ -1793,8 +2047,6 @@ void PlotWidget::showPointValues(QPoint point)
   {
     return;
   }
-  const QwtPlotItemList curves = qwtPlot()->itemList(QwtPlotItem::Rtti_PlotCurve);
-
   auto paint_to_plot = [this](QPoint p) {
     return QPointF(qwtPlot()->invTransform(QwtPlot::xBottom, p.x()),
                    qwtPlot()->invTransform(QwtPlot::yLeft, p.y()));
@@ -1808,40 +2060,38 @@ void PlotWidget::showPointValues(QPoint point)
 
   QSettings settings;
   const int prec = settings.value("Preferences::precision", 3).toInt();
+  const QColor text_color = qwtPlot()->palette().color(QPalette::WindowText);
 
-  QString text;
   int min_distance_sqr = 40 * 40;
   bool updated = false;
   QPointF marker_point;
-  for (int i = 0; i < curves.size(); i++)
-  {
-    QwtPlotCurve* curve = static_cast<QwtPlotCurve*>(curves[i]);
-    auto maybe_point = curvePointAt(curve, pointF.x());
-    if (maybe_point)
-    {
-      QPoint p(qwtPlot()->transform(QwtPlot::xBottom, maybe_point->x()),
-               qwtPlot()->transform(QwtPlot::yLeft, maybe_point->y()));
-      QPoint diff = p - point;
-      int dist_sqr = diff.x() * diff.x() + diff.y() * diff.y();
-      if (dist_sqr < min_distance_sqr)
-      {
-        updated = true;
-        min_distance_sqr = dist_sqr;
-        _show_point_marker->setValue(maybe_point.value());
-        marker_point = maybe_point.value();
+  std::vector<PointReadoutLine> lines;
 
-        const auto series = dynamic_cast<const QwtSeriesWrapper*>(curve->data());
-        const QString value_text =
-            series ? series->formatValue(maybe_point->y(), prec) :
-                     QString::number(maybe_point->y(), 'f', prec);
-        text = QString("<font color=%1>name: %2<br>time:%3<br>value: %4</font>")
-                   .arg(curve->pen().color().name())
-                   .arg(curve->title().text())
-                   .arg(QString::number(maybe_point->x(), 'f', prec))
-                   .arg(value_text);
-      }
+  for (const auto& info : curveList())
+  {
+    if (!info.curve->isVisible())
+    {
+      continue;
+    }
+    auto maybe_point = curvePointAt(info.curve, pointF.x());
+    if (!maybe_point)
+    {
+      continue;
+    }
+    QPoint p(qwtPlot()->transform(QwtPlot::xBottom, maybe_point->x()),
+             qwtPlot()->transform(QwtPlot::yLeft, maybe_point->y()));
+    QPoint diff = p - point;
+    int dist_sqr = diff.x() * diff.x() + diff.y() * diff.y();
+    if (dist_sqr < min_distance_sqr)
+    {
+      updated = true;
+      min_distance_sqr = dist_sqr;
+      marker_point = maybe_point.value();
+      lines = collectPointReadoutLines(curveList(), marker_point.x(), prec, 0.0, false);
     }
   }
+
+  QString text = buildPointReadoutText(marker_point.x(), lines, prec, text_color, std::nullopt);
   bool disappeared = !_show_point_marker->isVisible() && !updated;
   _show_point_marker->setVisible(updated);
   _show_point_text->setVisible(updated);
@@ -2024,6 +2274,57 @@ bool PlotWidget::canvasEventFilter(QEvent* event)
         QPointF pointF(qwtPlot()->invTransform(QwtPlot::xBottom, point.x()),
                        qwtPlot()->invTransform(QwtPlot::yLeft, point.y()));
         _tracker_click_pending = false;
+        if (_show_point_enabled)
+        {
+          const QSettings settings;
+          const int prec = settings.value("Preferences::precision", 3).toInt();
+          const QColor text_color = qwtPlot()->palette().color(QPalette::WindowText);
+          std::vector<PointReadoutLine> lines;
+          QPointF marker_point = pointF;
+          QColor marker_color = text_color;
+          bool updated = false;
+          int min_distance_sqr = 40 * 40;
+          for (const auto& info : curveList())
+          {
+            if (!info.curve->isVisible())
+            {
+              continue;
+            }
+            auto maybe_point = curvePointAt(info.curve, pointF.x());
+            if (!maybe_point)
+            {
+              continue;
+            }
+            QPoint p(qwtPlot()->transform(QwtPlot::xBottom, maybe_point->x()),
+                     qwtPlot()->transform(QwtPlot::yLeft, maybe_point->y()));
+            QPoint diff = p - point;
+            int dist_sqr = diff.x() * diff.x() + diff.y() * diff.y();
+            if (dist_sqr < min_distance_sqr)
+            {
+              updated = true;
+              min_distance_sqr = dist_sqr;
+              marker_point = maybe_point.value();
+              marker_color = info.curve->pen().color();
+              lines = collectPointReadoutLines(curveList(), marker_point.x(), prec, 0.0, false);
+            }
+          }
+
+          if (updated)
+          {
+            const int existing = hitTestDataPointMarker(point);
+            if (existing >= 0)
+            {
+              removeDataPointMarker(existing);
+            }
+            else
+            {
+              addDataPointMarker(marker_point,
+                                 buildPointReadoutText(marker_point.x(), lines, prec, text_color,
+                                                       std::nullopt),
+                                 marker_color);
+            }
+          }
+        }
         emit trackerMoved(pointF);
       }
       if (mouse_event->button() == Qt::LeftButton)
