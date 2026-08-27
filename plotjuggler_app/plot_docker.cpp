@@ -12,10 +12,12 @@
 #include <QBoxLayout>
 #include <QMouseEvent>
 #include <QSplitter>
+#include <QTimer>
 #include <QDebug>
 #include <QInputDialog>
 #include <QLineEdit>
 #include "PlotJuggler/svg_util.h"
+#include <algorithm>
 
 class HiddenTitleBar : public ads::CDockAreaTitleBar
 {
@@ -62,6 +64,15 @@ PlotDocker::PlotDocker(QString name, PlotDataMapRef& datamap, QWidget* parent)
   connect(this, &ads::CDockManager::dockWidgetRemoved, this, CreateFirstWidget);
 
   connect(this, &ads::CDockManager::dockAreasAdded, this, &PlotDocker::undoableChange);
+  connect(this, &ads::CDockManager::dockAreasAdded, this, &PlotDocker::schedulePlotCanvasAlignment);
+
+  connect(this, &PlotDocker::plotWidgetAdded, this, [this](PlotWidget* plot) {
+    connect(plot, &PlotWidget::curveListChanged, this, &PlotDocker::schedulePlotCanvasAlignment);
+    connect(plot, &PlotWidget::rectChanged, this, &PlotDocker::schedulePlotCanvasAlignment);
+    connect(plot, &PJ::PlotWidgetBase::widgetResized, this, &PlotDocker::schedulePlotCanvasAlignment);
+    connect(plot, &QObject::destroyed, this, &PlotDocker::schedulePlotCanvasAlignment);
+    schedulePlotCanvasAlignment();
+  });
 
   CreateFirstWidget();
 }
@@ -260,6 +271,7 @@ PlotWidget* PlotDocker::plotAt(int index)
 void PlotDocker::setHorizontalLink(bool enabled)
 {
   // TODO
+  schedulePlotCanvasAlignment();
 }
 
 void PlotDocker::zoomOut()
@@ -272,10 +284,62 @@ void PlotDocker::zoomOut()
 
 void PlotDocker::replot()
 {
+  synchronizePlotCanvasAlignment();
   for (int index = 0; index < plotCount(); index++)
   {
     plotAt(index)->replot();
   }
+}
+
+void PlotDocker::schedulePlotCanvasAlignment()
+{
+  if (_aligning_plot_canvases)
+  {
+    return;
+  }
+  QTimer::singleShot(0, this, &PlotDocker::synchronizePlotCanvasAlignment);
+}
+
+void PlotDocker::synchronizePlotCanvasAlignment()
+{
+  if (_aligning_plot_canvases)
+  {
+    return;
+  }
+
+  _aligning_plot_canvases = true;
+
+  std::vector<PlotWidget*> plots;
+  plots.reserve(static_cast<size_t>(plotCount()));
+  for (int index = 0; index < plotCount(); index++)
+  {
+    if (auto* plot = plotAt(index))
+    {
+      plots.push_back(plot);
+    }
+  }
+
+  const QwtAxisId axes[] = { QwtPlot::yLeft, QwtPlot::yRight };
+  for (QwtAxisId axis_id : axes)
+  {
+    for (auto* plot : plots)
+    {
+      plot->setAxisScaleDrawMinimumExtent(axis_id, 0.0);
+    }
+
+    double max_extent = 0.0;
+    for (auto* plot : plots)
+    {
+      max_extent = std::max(max_extent, plot->axisScaleDrawExtent(axis_id));
+    }
+
+    for (auto* plot : plots)
+    {
+      plot->setAxisScaleDrawMinimumExtent(axis_id, max_extent);
+    }
+  }
+
+  _aligning_plot_canvases = false;
 }
 
 void PlotDocker::on_stylesheetChanged(QString theme)
