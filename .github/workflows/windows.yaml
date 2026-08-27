@@ -74,7 +74,7 @@ jobs:
             ~/.conan
             ~/.conan2
           key: >-
-            ${{ runner.os }}-msvc-${{ env.CONAN_MAJOR }}-${{ hashFiles('conanfile.txt', 'conanfile.py', 'conandata.yml', 'CMakeLists.txt', 'plotjuggler_app/CMakeLists.txt', 'plotjuggler_plugins/CMakeLists.txt', 'cmake/**/*.cmake') }}
+            ${{ runner.os }}-msvc-${{ env.CONAN_MAJOR }}-${{ hashFiles('conanfile.txt', 'conanfile.py', 'conandata.yml') }}
           restore-keys: |
             ${{ runner.os }}-msvc-${{ env.CONAN_MAJOR }}-
             ${{ runner.os }}-msvc-
@@ -135,7 +135,7 @@ jobs:
         # Required for both pull (private packages) and push. GITHUB_TOKEN is
         # auto-provisioned and scoped to this repo's packages. Skip if neither
         # oras install path succeeded — graceful degradation to no-cache build.
-        if: github.repository_owner == 'PlotJuggler' && (steps.setup_oras.outcome == 'success' || steps.setup_oras_fallback.outcome == 'success')
+        if: github.repository_owner == 'PaulErly' && (steps.setup_oras.outcome == 'success' || steps.setup_oras_fallback.outcome == 'success')
         shell: pwsh
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -143,7 +143,7 @@ jobs:
           $env:GHCR_TOKEN | oras login ghcr.io -u $env:GITHUB_ACTOR --password-stdin
 
       - name: Restore Conan cache from ghcr.io
-        if: github.repository_owner == 'PlotJuggler' && (steps.setup_oras.outcome == 'success' || steps.setup_oras_fallback.outcome == 'success')
+        if: github.repository_owner == 'PaulErly' && (steps.setup_oras.outcome == 'success' || steps.setup_oras_fallback.outcome == 'success')
         shell: pwsh
         run: |
           $tag = "${{ steps.conan_cache.outputs.tag }}"
@@ -188,7 +188,7 @@ jobs:
         # access to ghcr.io packages). Skip on cache HIT — the tag content is
         # already up to date, no point re-uploading the same bytes. Skip if
         # neither oras install path succeeded (graceful degradation).
-        if: github.event_name == 'push' && github.repository == 'PlotJuggler/PlotJuggler' && env.CONAN_CACHE_HIT != '1' && (steps.setup_oras.outcome == 'success' || steps.setup_oras_fallback.outcome == 'success')
+        if: github.event_name == 'push' && github.repository == 'PaulErly/PlotJuggler' && env.CONAN_CACHE_HIT != '1' && (steps.setup_oras.outcome == 'success' || steps.setup_oras_fallback.outcome == 'success')
         shell: pwsh
         run: |
           $tag = "${{ steps.conan_cache.outputs.tag }}"
@@ -337,7 +337,6 @@ jobs:
           $ref_name = "${{ github.ref_name }}" -replace '/', '-'
           $zip_name = "PlotJuggler-$ref_name-Windows-x64-portable.zip"
           $dataDir = "installer\io.plotjuggler.application\data"
-
           if (-not (Test-Path (Join-Path $dataDir "plotjuggler.exe"))) {
             Write-Error "plotjuggler.exe not found in $dataDir"
             exit 1
