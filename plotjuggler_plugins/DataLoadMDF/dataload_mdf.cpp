@@ -120,20 +120,6 @@ void logImportStats(const std::string& series_name, const ImportStats& stats)
            << stats.non_finite;
 }
 
-std::optional<double> firstTimeOffset(const mdf::IChannelObserver& master)
-{
-  const auto samples = master.NofSamples();
-  for (uint64_t sample = 0; sample < samples; sample++)
-  {
-    double time = 0.0;
-    if (readTime(master, sample, time))
-    {
-      return time;
-    }
-  }
-  return std::nullopt;
-}
-
 bool hasTextValue(const mdf::IChannelObserver& observer, uint64_t sample,
                   std::string& text_value)
 {
@@ -149,7 +135,7 @@ bool hasTextValue(const mdf::IChannelObserver& observer, uint64_t sample,
 bool importNumericSeries(const mdf::IChannelObserver& master,
                          const mdf::IChannelObserver& observer,
                          const std::string& series_name, PlotGroup::Ptr group,
-                         PlotDataMapRef& plot_data, double time_offset)
+                         PlotDataMapRef& plot_data)
 {
   auto series = plot_data.addNumeric(series_name, group);
   const auto samples = importSampleCount(master, observer, series_name);
@@ -190,7 +176,10 @@ bool importNumericSeries(const mdf::IChannelObserver& master,
                << "time" << time << "raw_valid" << has_raw << "raw" << raw_value << "physical"
                << value << "valid" << true;
     }
-    series->second.pushBack({ time - time_offset, value });
+    // MDF master channels in the same synchronization domain already share a
+    // file-relative time base. Preserve that value so different channel groups
+    // retain their true relative start offsets.
+    series->second.pushBack({ time, value });
     stats.imported++;
   }
 
@@ -208,7 +197,7 @@ bool importNumericSeries(const mdf::IChannelObserver& master,
 bool importStringSeries(const mdf::IChannelObserver& master,
                         const mdf::IChannelObserver& observer,
                         const std::string& series_name, PlotGroup::Ptr group,
-                        PlotDataMapRef& plot_data, double time_offset)
+                        PlotDataMapRef& plot_data)
 {
   auto series = plot_data.addStringSeries(series_name, group);
   const auto samples = importSampleCount(master, observer, series_name);
@@ -242,7 +231,8 @@ bool importStringSeries(const mdf::IChannelObserver& master,
                << "time" << time << "physical" << QString::fromStdString(value) << "valid"
                << true;
     }
-    series->second.pushBack({ time - time_offset, value });
+    // Keep string/categorical series on the same MDF time base as numeric data.
+    series->second.pushBack({ time, value });
     stats.imported++;
   }
 
@@ -274,7 +264,7 @@ std::string uniqueSeriesName(const std::string& base_name, const PlotDataMapRef&
 bool importObserver(const mdf::IChannelObserver& master,
                     const mdf::IChannelObserver& observer,
                     const std::string& series_name, PlotGroup::Ptr group,
-                    PlotDataMapRef& plot_data, double time_offset)
+                    PlotDataMapRef& plot_data)
 {
   if (observer.IsMaster() || observer.IsArray())
   {
@@ -283,15 +273,15 @@ bool importObserver(const mdf::IChannelObserver& master,
 
   if (isTextLikeConversion(observer))
   {
-    return importStringSeries(master, observer, series_name, group, plot_data, time_offset);
+    return importStringSeries(master, observer, series_name, group, plot_data);
   }
 
-  if (importNumericSeries(master, observer, series_name, group, plot_data, time_offset))
+  if (importNumericSeries(master, observer, series_name, group, plot_data))
   {
     return true;
   }
 
-  return importStringSeries(master, observer, series_name, group, plot_data, time_offset);
+  return importStringSeries(master, observer, series_name, group, plot_data);
 }
 
 }  // namespace
@@ -372,8 +362,6 @@ bool DataLoadMDF::readDataFromFile(FileLoadInfo* fileload_info, PlotDataMapRef& 
         continue;
       }
 
-      const auto time_offset = firstTimeOffset(**master_it).value_or(0.0);
-
       for (const auto& observer : observers)
       {
         if (!observer)
@@ -384,7 +372,7 @@ bool DataLoadMDF::readDataFromFile(FileLoadInfo* fileload_info, PlotDataMapRef& 
         const auto base_name = makeSeriesName(data_group_index, channel_group_index, *observer);
         const auto series_name = uniqueSeriesName(base_name, plot_data, data_group_index,
                                                   channel_group_index);
-        if (importObserver(**master_it, *observer, series_name, {}, plot_data, time_offset))
+        if (importObserver(**master_it, *observer, series_name, {}, plot_data))
         {
           imported_series++;
         }
