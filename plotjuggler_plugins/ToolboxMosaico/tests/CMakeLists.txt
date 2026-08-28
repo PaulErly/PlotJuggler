@@ -1,4 +1,8 @@
-find_package(GTest REQUIRED)
+find_package(GTest QUIET)
+if(NOT GTest_FOUND)
+    message(STATUS "[ToolboxMosaico] GTest not found; unit tests disabled")
+    return()
+endif()
 
 add_executable(mosaico_unit_tests
     core/time_format_test.cpp
