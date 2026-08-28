@@ -162,3 +162,35 @@ TEST(TimeSeriesStorage, OutOfOrderInsertionKeepsDuplicateTimestampBlock)
   EXPECT_DOUBLE_EQ(numeric.at(2).y, 0.0);
   EXPECT_DOUBLE_EQ(numeric.at(3).x, 80.0);
 }
+
+TEST(TimeSeriesVisualization, ConstantZeroFullRangeHasVisibleYAxisSpan)
+{
+  PJ::PlotData numeric("constant_zero", {});
+  numeric.pushBack({ 0.0, 0.0 });
+  numeric.pushBack({ 1.0, 0.0 });
+  numeric.pushBack({ 2.0, 0.0 });
+
+  QwtTimeseries numeric_qwt(&numeric);
+  const auto range = numeric_qwt.getVisualizationRangeY({ 0.0, 2.0 });
+
+  ASSERT_TRUE(range.has_value());
+  EXPECT_LT(range->min, range->max);
+  EXPECT_DOUBLE_EQ(range->min, 0.0);
+  EXPECT_DOUBLE_EQ(range->max, 1.0);
+}
+
+TEST(TimeSeriesVisualization, ConstantNonzeroFullRangeIsPaddedAroundValue)
+{
+  PJ::PlotData numeric("constant_voltage", {});
+  numeric.pushBack({ 0.0, 12.0 });
+  numeric.pushBack({ 1.0, 12.0 });
+  numeric.pushBack({ 2.0, 12.0 });
+
+  QwtTimeseries numeric_qwt(&numeric);
+  const auto range = numeric_qwt.getVisualizationRangeY({ 0.0, 2.0 });
+
+  ASSERT_TRUE(range.has_value());
+  EXPECT_LT(range->min, 12.0);
+  EXPECT_GT(range->max, 12.0);
+  EXPECT_LT(range->min, range->max);
+}
