@@ -45,6 +45,20 @@ bool sameVerticalColumn(const PlotGeometry& lhs, const PlotGeometry& rhs)
          std::abs(lhs.outer.width() - rhs.outer.width()) <= width_tolerance;
 }
 
+bool belongsToPlotArea(QObject* watched)
+{
+  auto* widget = qobject_cast<QWidget*>(watched);
+  while (widget)
+  {
+    if (qobject_cast<PlotWidget*>(widget) || qobject_cast<PlotDocker*>(widget))
+    {
+      return true;
+    }
+    widget = widget->parentWidget();
+  }
+  return false;
+}
+
 class PlotCanvasAlignmentFix : public QObject
 {
 public:
@@ -57,7 +71,7 @@ public:
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override
   {
-    if (!_aligning && watched && watched->isWidgetType())
+    if (!_aligning && belongsToPlotArea(watched))
     {
       switch (event->type())
       {
