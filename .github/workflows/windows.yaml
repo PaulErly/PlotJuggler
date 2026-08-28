@@ -25,7 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         windows-version:
-          - 'windows-latest'
+          - 'windows-2022'
     env:
       CXXFLAGS: /MP
       # Python version used both at compile time (Python.h, python312.lib) AND
@@ -184,6 +184,10 @@ jobs:
           }
           # A missing cache is not itself a workflow failure.
           $global:LASTEXITCODE = 0
+
+      - name: Detect Conan profile
+        shell: pwsh
+        run: conan profile detect --force
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
