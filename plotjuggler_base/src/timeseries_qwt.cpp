@@ -12,6 +12,28 @@
 #include <QPushButton>
 #include <QString>
 
+namespace
+{
+Range expandDegenerateNumericRange(double min_y, double max_y)
+{
+  if (min_y != max_y)
+  {
+    return { min_y, max_y };
+  }
+
+  // A zero-height Y range makes Qwt draw the curve on the canvas boundary and
+  // produces no useful ticks/labels. Give constant signals a small but
+  // meaningful display range while keeping the actual value visible.
+  if (std::abs(min_y) < std::numeric_limits<double>::epsilon())
+  {
+    return { 0.0, 1.0 };
+  }
+
+  const double pad = std::abs(min_y) * 0.1;
+  return { min_y - pad, max_y + pad };
+}
+}  // namespace
+
 RangeOpt QwtSeriesWrapper::getVisualizationRangeY(Range range_x)
 {
   if (range_x.min <= std::numeric_limits<double>::lowest() &&
@@ -49,33 +71,24 @@ RangeOpt QwtTimeseries::getVisualizationRangeY(Range range_X)
 
   if (first_index == 0 && last_index == plotData()->size() - 1)
   {
-    return _ts_data->rangeY();
+    const auto full_range = _ts_data->rangeY();
+    if (!full_range)
+    {
+      return {};
+    }
+    return expandDegenerateNumericRange(full_range->min, full_range->max);
   }
 
   double min_y = (std::numeric_limits<double>::max());
   double max_y = (std::numeric_limits<double>::lowest());
 
-  for (size_t i = first_index; i < last_index; i++)
+  for (int i = first_index; i <= last_index; i++)
   {
-    const double Y = sample(i).y();
+    const double Y = sample(size_t(i)).y();
     min_y = std::min(min_y, Y);
     max_y = std::max(max_y, Y);
   }
-  if (min_y == max_y)
-  {
-    if (std::abs(min_y) < std::numeric_limits<double>::epsilon())
-    {
-      min_y = 0.0;
-      max_y = 1.0;
-    }
-    else
-    {
-      const double pad = std::abs(min_y) * 0.1;
-      min_y -= pad;
-      max_y += pad;
-    }
-  }
-  return Range{ min_y, max_y };
+  return expandDegenerateNumericRange(min_y, max_y);
 }
 
 std::optional<QPointF> QwtTimeseries::sampleFromTime(double t)
