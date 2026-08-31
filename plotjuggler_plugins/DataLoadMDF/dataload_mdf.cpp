@@ -14,6 +14,7 @@
 #include <mdf/mdfreader.h>
 
 #include <QFileInfo>
+#include <QDebug>
 
 #include <algorithm>
 #include <cmath>
@@ -65,18 +66,58 @@ bool readTime(const mdf::IChannelObserver& master, uint64_t sample, double& time
   return master.GetChannelValue(sample, time) && std::isfinite(time);
 }
 
-std::optional<double> firstTimeOffset(const mdf::IChannelObserver& master)
+bool sampleIsValid(const mdf::IChannelObserver& observer, uint64_t sample)
 {
-  const auto samples = master.NofSamples();
-  for (uint64_t sample = 0; sample < samples; sample++)
+  const auto& valid_list = observer.GetValidList();
+  return valid_list.empty() || sample >= valid_list.size() || valid_list[size_t(sample)];
+}
+
+bool diagnosticsEnabled()
+{
+  return qEnvironmentVariableIsSet("PLOTJUGGLER_MDF_DIAGNOSTICS");
+}
+
+bool shouldLogSeriesDiagnostics(const std::string& series_name)
+{
+  const QByteArray filter = qgetenv("PLOTJUGGLER_MDF_DIAGNOSTIC_SIGNAL");
+  return filter.isEmpty() || series_name.find(filter.constData()) != std::string::npos;
+}
+
+uint64_t importSampleCount(const mdf::IChannelObserver& master,
+                           const mdf::IChannelObserver& observer,
+                           const std::string& series_name)
+{
+  const auto master_samples = master.NofSamples();
+  const auto observer_samples = observer.NofSamples();
+  if (diagnosticsEnabled() && shouldLogSeriesDiagnostics(series_name) &&
+      master_samples != observer_samples)
   {
-    double time = 0.0;
-    if (readTime(master, sample, time))
-    {
-      return time;
-    }
+    qDebug() << "MDF sample-count mismatch for" << QString::fromStdString(series_name)
+             << "master samples" << master_samples << "channel samples" << observer_samples;
   }
-  return std::nullopt;
+  return observer_samples;
+}
+
+struct ImportStats
+{
+  uint64_t imported = 0;
+  uint64_t invalid = 0;
+  uint64_t missing_time = 0;
+  uint64_t missing_value = 0;
+  uint64_t non_finite = 0;
+};
+
+void logImportStats(const std::string& series_name, const ImportStats& stats)
+{
+  if (!diagnosticsEnabled() || !shouldLogSeriesDiagnostics(series_name))
+  {
+    return;
+  }
+
+  qDebug() << "MDF import stats for" << QString::fromStdString(series_name) << "imported"
+           << stats.imported << "invalid" << stats.invalid << "missing_time"
+           << stats.missing_time << "missing_value" << stats.missing_value << "non_finite"
+           << stats.non_finite;
 }
 
 bool hasTextValue(const mdf::IChannelObserver& observer, uint64_t sample,
@@ -94,22 +135,55 @@ bool hasTextValue(const mdf::IChannelObserver& observer, uint64_t sample,
 bool importNumericSeries(const mdf::IChannelObserver& master,
                          const mdf::IChannelObserver& observer,
                          const std::string& series_name, PlotGroup::Ptr group,
-                         PlotDataMapRef& plot_data, double time_offset)
+                         PlotDataMapRef& plot_data)
 {
   auto series = plot_data.addNumeric(series_name, group);
-  const auto samples = std::min(master.NofSamples(), observer.NofSamples());
+  const auto samples = importSampleCount(master, observer, series_name);
+  ImportStats stats;
 
   for (uint64_t sample = 0; sample < samples; sample++)
   {
     double time = 0.0;
     double value = 0.0;
 
-    if (readTime(master, sample, time) && observer.GetEngValue(sample, value) &&
-        std::isfinite(value))
+    if (!sampleIsValid(observer, sample))
     {
-      series->second.pushBack({ time - time_offset, value });
+      stats.invalid++;
+      continue;
     }
+    if (!readTime(master, sample, time))
+    {
+      stats.missing_time++;
+      continue;
+    }
+    if (!observer.GetEngValue(sample, value))
+    {
+      stats.missing_value++;
+      continue;
+    }
+    if (!std::isfinite(value))
+    {
+      stats.non_finite++;
+      continue;
+    }
+
+    if (diagnosticsEnabled() && shouldLogSeriesDiagnostics(series_name) && time >= 75.0 &&
+        time <= 82.0)
+    {
+      double raw_value = 0.0;
+      const bool has_raw = observer.GetChannelValue(sample, raw_value);
+      qDebug() << "MDF sample" << QString::fromStdString(series_name) << "index" << sample
+               << "time" << time << "raw_valid" << has_raw << "raw" << raw_value << "physical"
+               << value << "valid" << true;
+    }
+    // MDF master channels in the same synchronization domain already share a
+    // file-relative time base. Preserve that value so different channel groups
+    // retain their true relative start offsets.
+    series->second.pushBack({ time, value });
+    stats.imported++;
   }
+
+  logImportStats(series_name, stats);
 
   if (series->second.size() == 0)
   {
@@ -123,21 +197,46 @@ bool importNumericSeries(const mdf::IChannelObserver& master,
 bool importStringSeries(const mdf::IChannelObserver& master,
                         const mdf::IChannelObserver& observer,
                         const std::string& series_name, PlotGroup::Ptr group,
-                        PlotDataMapRef& plot_data, double time_offset)
+                        PlotDataMapRef& plot_data)
 {
   auto series = plot_data.addStringSeries(series_name, group);
-  const auto samples = std::min(master.NofSamples(), observer.NofSamples());
+  const auto samples = importSampleCount(master, observer, series_name);
+  ImportStats stats;
 
   for (uint64_t sample = 0; sample < samples; sample++)
   {
     double time = 0.0;
     std::string value;
 
-    if (readTime(master, sample, time) && hasTextValue(observer, sample, value))
+    if (!sampleIsValid(observer, sample))
     {
-      series->second.pushBack({ time - time_offset, value });
+      stats.invalid++;
+      continue;
     }
+    if (!readTime(master, sample, time))
+    {
+      stats.missing_time++;
+      continue;
+    }
+    if (!hasTextValue(observer, sample, value))
+    {
+      stats.missing_value++;
+      continue;
+    }
+
+    if (diagnosticsEnabled() && shouldLogSeriesDiagnostics(series_name) && time >= 75.0 &&
+        time <= 82.0)
+    {
+      qDebug() << "MDF sample" << QString::fromStdString(series_name) << "index" << sample
+               << "time" << time << "physical" << QString::fromStdString(value) << "valid"
+               << true;
+    }
+    // Keep string/categorical series on the same MDF time base as numeric data.
+    series->second.pushBack({ time, value });
+    stats.imported++;
   }
+
+  logImportStats(series_name, stats);
 
   if (series->second.size() == 0)
   {
@@ -165,7 +264,7 @@ std::string uniqueSeriesName(const std::string& base_name, const PlotDataMapRef&
 bool importObserver(const mdf::IChannelObserver& master,
                     const mdf::IChannelObserver& observer,
                     const std::string& series_name, PlotGroup::Ptr group,
-                    PlotDataMapRef& plot_data, double time_offset)
+                    PlotDataMapRef& plot_data)
 {
   if (observer.IsMaster() || observer.IsArray())
   {
@@ -174,15 +273,15 @@ bool importObserver(const mdf::IChannelObserver& master,
 
   if (isTextLikeConversion(observer))
   {
-    return importStringSeries(master, observer, series_name, group, plot_data, time_offset);
+    return importStringSeries(master, observer, series_name, group, plot_data);
   }
 
-  if (importNumericSeries(master, observer, series_name, group, plot_data, time_offset))
+  if (importNumericSeries(master, observer, series_name, group, plot_data))
   {
     return true;
   }
 
-  return importStringSeries(master, observer, series_name, group, plot_data, time_offset);
+  return importStringSeries(master, observer, series_name, group, plot_data);
 }
 
 }  // namespace
@@ -263,8 +362,6 @@ bool DataLoadMDF::readDataFromFile(FileLoadInfo* fileload_info, PlotDataMapRef& 
         continue;
       }
 
-      const auto time_offset = firstTimeOffset(**master_it).value_or(0.0);
-
       for (const auto& observer : observers)
       {
         if (!observer)
@@ -275,7 +372,7 @@ bool DataLoadMDF::readDataFromFile(FileLoadInfo* fileload_info, PlotDataMapRef& 
         const auto base_name = makeSeriesName(data_group_index, channel_group_index, *observer);
         const auto series_name = uniqueSeriesName(base_name, plot_data, data_group_index,
                                                   channel_group_index);
-        if (importObserver(**master_it, *observer, series_name, {}, plot_data, time_offset))
+        if (importObserver(**master_it, *observer, series_name, {}, plot_data))
         {
           imported_series++;
         }

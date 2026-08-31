@@ -88,6 +88,14 @@ public:
 
   void refreshCurveMetadata();
 
+  double axisScaleDrawExtent(QwtAxisId axis_id) const;
+
+  void setAxisScaleDrawMinimumExtent(QwtAxisId axis_id, double extent);
+
+  QRect canvasGeometryGlobal() const;
+
+  double globalPixelX(double relative_time) const;
+
 protected:
   PlotDataMapRef& _mapped_data;
 

@@ -59,6 +59,7 @@ set(PLOTJUGGLER_SRC
     plotwidget_editor.cpp
     plotwidget_transforms.cpp
     plot_docker.cpp
+    plot_canvas_alignment_fix.cpp
     plot_docker_toolbar.cpp
     preferences_dialog.cpp
     point_series_xy.cpp
@@ -207,7 +208,6 @@ if(COMPILING_WITH_CATKIN)
 elseif(COMPILING_WITH_AMENT)
 
   target_link_libraries(plotjuggler PRIVATE ament_index_cpp::ament_index_cpp)
-
   install(TARGETS plotjuggler DESTINATION lib/${PROJECT_NAME})
 else()
   install(TARGETS plotjuggler DESTINATION bin)

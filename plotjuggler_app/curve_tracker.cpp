@@ -15,6 +15,7 @@
 #include <qevent.h>
 #include <QFontDatabase>
 #include <QSettings>
+#include <algorithm>
 
 struct compareX
 {
@@ -87,10 +88,11 @@ void CurveTracker::setPosition(const QPointF& tracker_position)
   rect.setTop(_plot->canvasMap(QwtPlot::yLeft).s2());
   rect.setLeft(_plot->canvasMap(QwtPlot::xBottom).s1());
   rect.setRight(_plot->canvasMap(QwtPlot::xBottom).s2());
+  const QRectF visible_rect = rect.normalized();
 
   double min_Y = std::numeric_limits<double>::max();
   double max_Y = -min_Y;
-  int visible_points = 0;
+  int readout_points = 0;
 
   while (_point_markers.size() > curves.size())
   {
@@ -132,7 +134,7 @@ void CurveTracker::setPosition(const QPointF& tracker_position)
       continue;
     }
     QColor color = curve->pen().color();
-    text_X_offset = rect.width() * 0.02;
+    text_X_offset = visible_rect.width() * 0.02;
     if (!_point_markers[i]->symbol() || _point_markers[i]->symbol()->brush().color() != color)
     {
       QwtSymbol* sym = new QwtSymbol(QwtSymbol::Ellipse, color, QPen(Qt::black), QSize(5, 5));
@@ -141,6 +143,7 @@ void CurveTracker::setPosition(const QPointF& tracker_position)
     const auto maybe_point = curvePointAt(curve, tracker_position.x());
     if (!maybe_point)
     {
+      _point_markers[i]->setVisible(false);
       continue;
     }
     const std::optional<QPointF> maybe_reference =
@@ -148,34 +151,36 @@ void CurveTracker::setPosition(const QPointF& tracker_position)
 
     const QPointF point = maybe_point.value();
     _point_markers[i]->setValue(point);
-    if (rect.contains(point) && _visible)
-    {
-      min_Y = std::min(min_Y, point.y());
-      max_Y = std::max(max_Y, point.y());
 
-      visible_points++;
-      double value = point.y();
-      LineParts parts;
-      const auto series = dynamic_cast<const QwtSeriesWrapper*>(curve->data());
-      parts.value = series ? series->formatValue(value, prec) : QString::number(value, 'f', prec);
-      if (maybe_reference && (!series || !series->isCategorical()))
-      {
-        auto delta_str = QString::number(value - maybe_reference->y(), 'f', prec);
-        parts.delta = QString(" (Δ %1)").arg(delta_str);
-      }
-      parts.name = curve->title().text();
-      parts.color = color;
-      text_lines.insert(std::make_pair(value, parts));
-      _point_markers[i]->setVisible(true);
+    // The readout is a statement about the signal value at the selected time.
+    // Do not suppress it just because the sample lies exactly on (or slightly
+    // outside, due to floating-point rounding) the current Y-axis boundary.
+    const double clamped_y =
+        std::clamp(point.y(), visible_rect.top(), visible_rect.bottom());
+    min_Y = std::min(min_Y, clamped_y);
+    max_Y = std::max(max_Y, clamped_y);
+    readout_points++;
 
-      values_char_count = std::max(values_char_count, parts.value.length());
-      delta_char_count = std::max(delta_char_count, parts.delta.length());
-    }
-    else
+    double value = point.y();
+    LineParts parts;
+    const auto series = dynamic_cast<const QwtSeriesWrapper*>(curve->data());
+    parts.value = series ? series->formatValue(value, prec) : QString::number(value, 'f', prec);
+    if (maybe_reference && (!series || !series->isCategorical()))
     {
-      _point_markers[i]->setVisible(false);
+      auto delta_str = QString::number(value - maybe_reference->y(), 'f', prec);
+      parts.delta = QString(" (Δ %1)").arg(delta_str);
     }
-    _point_markers[i]->setValue(point);
+    parts.name = curve->title().text();
+    parts.color = color;
+    text_lines.insert(std::make_pair(value, parts));
+
+    values_char_count = std::max(values_char_count, parts.value.length());
+    delta_char_count = std::max(delta_char_count, parts.delta.length());
+
+    // Point markers themselves should still only be drawn when the sample is
+    // inside the visible Y range. The text readout above is intentionally
+    // independent of this visibility test.
+    _point_markers[i]->setVisible(_visible && visible_rect.contains(point));
   }
 
   // add indentation to align the columns
@@ -256,21 +261,21 @@ void CurveTracker::setPosition(const QPointF& tracker_position)
     _text_marker->setXValue(tracker_position.x() + text_X_offset);
   }
 
-  if (visible_points > 0)
+  if (readout_points > 0)
   {
     _text_marker->setYValue(0.5 * (max_Y + min_Y));
   }
 
-  double canvas_ratio = rect.width() / double(_plot->width());
+  double canvas_ratio = visible_rect.width() / double(_plot->width());
   double text_width = mark_text.textSize().width() * canvas_ratio;
-  bool exceed_right = (_text_marker->boundingRect().right() + text_width) > rect.right();
+  bool exceed_right = (_text_marker->boundingRect().right() + text_width) > visible_rect.right();
 
   if (exceed_right)
   {
     _text_marker->setXValue(tracker_position.x() - text_X_offset - text_width);
   }
 
-  _text_marker->setVisible(visible_points > 0 && _visible && _param != LINE_ONLY);
+  _text_marker->setVisible(readout_points > 0 && _visible && _param != LINE_ONLY);
 
   _prev_trackerpoint = tracker_position;
 }
@@ -283,21 +288,35 @@ void CurveTracker::setReferencePosition(std::optional<QPointF> reference_pos)
 
 std::optional<QPointF> curvePointAt(const QwtPlotCurve* curve, double x)
 {
-  if (curve->dataSize() >= 2)
+  const int sample_count = curve->dataSize();
+  if (sample_count <= 0)
   {
-    int index = qwtUpperSampleIndex<QPointF>(*curve->data(), x, compareX());
-
-    if (index > 0 && index < curve->dataSize())
-    {
-      auto p1 = (curve->sample(index - 1));
-      auto p2 = (curve->sample(index));
-      double middle_X = (p1.x() + p2.x()) / 2.0;
-      return (x < middle_X) ? p1 : p2;
-    }
-    else if (index >= curve->dataSize())
-    {
-      return curve->sample(curve->dataSize() - 1);
-    }
+    return std::nullopt;
   }
-  return std::nullopt;
+
+  const QPointF first_sample = curve->sample(0);
+  if (x < first_sample.x())
+  {
+    return std::nullopt;
+  }
+  if (sample_count == 1)
+  {
+    return first_sample;
+  }
+
+  int index = qwtUpperSampleIndex<QPointF>(*curve->data(), x, compareX());
+
+  if (index <= 0)
+  {
+    return first_sample;
+  }
+  if (index >= sample_count)
+  {
+    return curve->sample(sample_count - 1);
+  }
+
+  auto p1 = curve->sample(index - 1);
+  auto p2 = curve->sample(index);
+  double middle_X = (p1.x() + p2.x()) / 2.0;
+  return (x < middle_X) ? p1 : p2;
 }

@@ -276,6 +276,22 @@ target_include_directories(
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/qwt/src>
          $<INSTALL_INTERFACE:include>)
 
+include(CTest)
+if(BUILD_TESTING)
+  find_package(GTest QUIET)
+  if(GTest_FOUND)
+    include(GoogleTest)
+    add_executable(plotjuggler_regression_tests
+                   tests/test_plot_layout_and_series.cpp)
+    target_link_libraries(plotjuggler_regression_tests PRIVATE plotjuggler_base
+                                                              Qt5::Widgets
+                                                              GTest::gtest_main)
+    gtest_discover_tests(plotjuggler_regression_tests)
+  else()
+    message(STATUS "GTest not found; plotjuggler_regression_tests disabled")
+  endif()
+endif()
+
 # ########################  INSTALL  ####################################
 
 if(COMPILING_WITH_CATKIN)

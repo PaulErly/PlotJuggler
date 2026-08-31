@@ -535,7 +535,8 @@ PlotWidget::CurveInfo* PlotWidget::addCurveXY(std::string name_x, std::string na
     auto plot_qwt = createCurveXY(&data_x, &data_y);
 
     curve->setPaintAttribute(QwtPlotCurve::ClipPolygons, true);
-    curve->setPaintAttribute(QwtPlotCurve::FilterPointsAggressive, true);
+    curve->setPaintAttribute(QwtPlotCurve::FilterPoints, true);
+    curve->setPaintAttribute(QwtPlotCurve::FilterPointsAggressive, false);
     curve->setData(plot_qwt);
   }
   catch (std::exception& ex)
@@ -596,7 +597,8 @@ PlotWidgetBase::CurveInfo* PlotWidget::addCurve(const std::string& name, QColor 
     auto curve = new QwtPlotCurve(displayCurveName(name, &it3->second));
     auto plot_qwt = new QwtStringTimeseries(&it3->second);
     curve->setPaintAttribute(QwtPlotCurve::ClipPolygons, true);
-    curve->setPaintAttribute(QwtPlotCurve::FilterPointsAggressive, true);
+    curve->setPaintAttribute(QwtPlotCurve::FilterPoints, true);
+    curve->setPaintAttribute(QwtPlotCurve::FilterPointsAggressive, false);
     curve->setData(plot_qwt);
 
     if (color == Qt::transparent)
@@ -642,6 +644,10 @@ PlotWidgetBase::CurveInfo* PlotWidget::addCurve(const std::string& name, QColor 
   updateCategoricalAxisLabels();
   _tracker->redraw();
   _reference_tracker->redraw();
+  if (info)
+  {
+    emit curveListChanged();
+  }
   return info;
 }
 
@@ -1380,6 +1386,43 @@ void PlotWidget::refreshCurveMetadata()
     }
   }
   updateCategoricalAxisLabels();
+  emit curveListChanged();
+}
+
+double PlotWidget::axisScaleDrawExtent(QwtAxisId axis_id) const
+{
+  const auto* axis = qwtPlot()->axisWidget(axis_id);
+  if (!axis || !qwtPlot()->axisEnabled(axis_id) || !axis->scaleDraw())
+  {
+    return 0.0;
+  }
+  return axis->scaleDraw()->extent(axis->font());
+}
+
+void PlotWidget::setAxisScaleDrawMinimumExtent(QwtAxisId axis_id, double extent)
+{
+  auto* axis = qwtPlot()->axisWidget(axis_id);
+  if (!axis || !axis->scaleDraw())
+  {
+    return;
+  }
+  axis->scaleDraw()->setMinimumExtent(extent);
+  axis->scaleDraw()->invalidateCache();
+  qwtPlot()->plotLayout()->invalidate();
+  qwtPlot()->updateAxes();
+}
+
+QRect PlotWidget::canvasGeometryGlobal() const
+{
+  const auto* canvas = qwtPlot()->canvas();
+  return QRect(canvas->mapToGlobal(QPoint(0, 0)), canvas->geometry().size());
+}
+
+double PlotWidget::globalPixelX(double relative_time) const
+{
+  const auto* canvas = qwtPlot()->canvas();
+  const double local_x = qwtPlot()->transform(QwtPlot::xBottom, relative_time);
+  return canvas->mapToGlobal(QPoint(qRound(local_x), 0)).x();
 }
 
 void PlotWidget::activateLegend(bool activate)

@@ -404,7 +404,8 @@ PlotWidgetBase::CurveInfo* PlotWidgetBase::addCurve(const std::string& name, Plo
     }
 
     curve->setPaintAttribute(QwtPlotCurve::ClipPolygons, true);
-    curve->setPaintAttribute(QwtPlotCurve::FilterPointsAggressive, true);
+    curve->setPaintAttribute(QwtPlotCurve::FilterPoints, true);
+    curve->setPaintAttribute(QwtPlotCurve::FilterPointsAggressive, false);
     curve->setData(plot_qwt);
   }
   catch (std::exception& ex)
@@ -453,7 +454,8 @@ PlotWidgetBase::CurveInfo* PlotWidgetBase::addCurve(const std::string& name,
 
   auto curve = new QwtPlotCurve(qname);
   curve->setPaintAttribute(QwtPlotCurve::ClipPolygons, true);
-  curve->setPaintAttribute(QwtPlotCurve::FilterPointsAggressive, true);
+  curve->setPaintAttribute(QwtPlotCurve::FilterPoints, true);
+  curve->setPaintAttribute(QwtPlotCurve::FilterPointsAggressive, false);
   curve->setData(new QwtStringTimeseries(&data));
 
   if (color == Qt::transparent)

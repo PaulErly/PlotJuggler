@@ -82,9 +82,15 @@ private:
 
   QRect plotRelativeFootprint(int index, QSize plot_size) const;
 
+  void schedulePlotCanvasAlignment();
+
+  void synchronizePlotCanvasAlignment();
+
   QString _name;
 
   PlotDataMapRef& _datamap;
+
+  bool _aligning_plot_canvases = false;
 
 signals:
 
