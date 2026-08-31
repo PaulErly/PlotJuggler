@@ -145,6 +145,26 @@ TEST(TimeSeriesStorage, DuplicateTimestampsReachQwtSeriesInOrder)
   EXPECT_EQ(string_qwt.formatValue(string_qwt.sample(2).y(), 3), "StopCharging");
 }
 
+TEST(TimeSeriesStorage, ExplicitCategoricalValuesPreserveEnumCodes)
+{
+  PJ::StringSeries states("module_state", {});
+  states.pushBackMapped(1.0, 2U, "MODULESTS_ON");
+  states.pushBackMapped(2.0, 0U, "MODULESTS_OFF");
+  states.pushBackMapped(3.0, 2U, "MODULESTS_ON");
+
+  QwtStringTimeseries qwt(&states);
+  ASSERT_EQ(qwt.size(), 3U);
+
+  // The first state encountered is ON, but it must remain at its source enum
+  // value (2) rather than being compacted to categorical index 0.
+  EXPECT_DOUBLE_EQ(qwt.sample(0).y(), 2.0);
+  EXPECT_DOUBLE_EQ(qwt.sample(1).y(), 0.0);
+  EXPECT_DOUBLE_EQ(qwt.sample(2).y(), 2.0);
+  EXPECT_EQ(qwt.formatValue(0.0, 3), "MODULESTS_OFF");
+  EXPECT_EQ(qwt.formatValue(2.0, 3), "MODULESTS_ON");
+  EXPECT_EQ(states.stringCount(), 3U);
+}
+
 TEST(TimeSeriesStorage, OutOfOrderInsertionKeepsDuplicateTimestampBlock)
 {
   PJ::PlotData numeric("numeric", {});

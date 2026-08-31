@@ -38,6 +38,8 @@ public:
   {
     _index_to_string.clear();
     _string_to_index.clear();
+    _mapped_index_to_string.clear();
+    _mapped_extent = 0;
     TimeseriesBase<StringDictIndex>::clear();
   }
 
@@ -64,9 +66,36 @@ public:
     TimeseriesBase<StringDictIndex>::pushBack({ p.first, idx });
   }
 
+  // Preserve an explicit non-negative integer categorical value instead of
+  // assigning a dense dictionary index. This is used by MDF value-to-text
+  // conversions so an enum such as 2 = MODULESTS_ON is plotted at Y=2 even
+  // when MODULESTS_ON is the first or only state present in the recording.
+  void pushBackMapped(double timestamp, uint32_t categorical_value, std::string_view str)
+  {
+    if (str.empty() || categorical_value == StringDictIndex::INVALID)
+    {
+      return;
+    }
+
+    _mapped_index_to_string.emplace(categorical_value, std::string(str));
+    _mapped_extent = std::max(_mapped_extent, size_t(categorical_value) + 1U);
+    TimeseriesBase<StringDictIndex>::pushBack({ timestamp, StringDictIndex(categorical_value) });
+  }
+
   std::string_view getString(StringDictIndex idx) const
   {
-    if (!idx.isValid() || idx.index >= _index_to_string.size())
+    if (!idx.isValid())
+    {
+      return {};
+    }
+
+    const auto mapped_it = _mapped_index_to_string.find(idx.index);
+    if (mapped_it != _mapped_index_to_string.end())
+    {
+      return mapped_it->second;
+    }
+
+    if (idx.index >= _index_to_string.size())
     {
       return {};
     }
@@ -75,7 +104,11 @@ public:
 
   size_t stringCount() const
   {
-    return _index_to_string.size();
+    // QwtStringTimeseries historically uses stringCount() to establish its
+    // categorical bounding range. For explicitly mapped values return the
+    // numeric extent, not merely the number of labels encountered, so a lone
+    // enum value of 2 still has a range that includes Y=2.
+    return std::max(_index_to_string.size(), _mapped_extent);
   }
 
   std::optional<std::string_view> getStringFromX(double x) const
@@ -92,6 +125,8 @@ public:
   {
     _index_to_string = std::move(other._index_to_string);
     _string_to_index = std::move(other._string_to_index);
+    _mapped_index_to_string = std::move(other._mapped_index_to_string);
+    _mapped_extent = other._mapped_extent;
     PlotDataBase<double, StringDictIndex>::clonePoints(std::move(other));
   }
 
@@ -99,6 +134,8 @@ public:
   {
     _index_to_string = other._index_to_string;
     _string_to_index = other._string_to_index;
+    _mapped_index_to_string = other._mapped_index_to_string;
+    _mapped_extent = other._mapped_extent;
     PlotDataBase<double, StringDictIndex>::clonePoints(other);
   }
 
@@ -107,6 +144,8 @@ public:
     TimeseriesBase<StringDictIndex>::swapData(other);
     std::swap(_index_to_string, other._index_to_string);
     std::swap(_string_to_index, other._string_to_index);
+    std::swap(_mapped_index_to_string, other._mapped_index_to_string);
+    std::swap(_mapped_extent, other._mapped_extent);
   }
 
 private:
@@ -127,6 +166,8 @@ private:
   std::string _tmp_str;
   std::vector<std::string> _index_to_string;
   std::unordered_map<std::string, uint32_t> _string_to_index;
+  std::unordered_map<uint32_t, std::string> _mapped_index_to_string;
+  size_t _mapped_extent = 0;
 };
 
 }  // namespace PJ
