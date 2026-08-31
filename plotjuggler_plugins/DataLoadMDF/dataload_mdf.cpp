@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -132,6 +133,26 @@ bool hasTextValue(const mdf::IChannelObserver& observer, uint64_t sample,
   return !text_value.empty();
 }
 
+bool rawCategoricalValue(const mdf::IChannelObserver& observer, uint64_t sample,
+                         uint32_t& categorical_value)
+{
+  double raw_value = 0.0;
+  if (!observer.GetChannelValue(sample, raw_value) || !std::isfinite(raw_value))
+  {
+    return false;
+  }
+
+  const double rounded = std::round(raw_value);
+  if (std::abs(raw_value - rounded) > 1.0e-9 || rounded < 0.0 ||
+      rounded >= static_cast<double>(std::numeric_limits<uint32_t>::max()))
+  {
+    return false;
+  }
+
+  categorical_value = static_cast<uint32_t>(rounded);
+  return true;
+}
+
 bool importNumericSeries(const mdf::IChannelObserver& master,
                          const mdf::IChannelObserver& observer,
                          const std::string& series_name, PlotGroup::Ptr group,
@@ -224,15 +245,32 @@ bool importStringSeries(const mdf::IChannelObserver& master,
       continue;
     }
 
+    uint32_t categorical_value = 0;
+    const bool has_raw_category = rawCategoricalValue(observer, sample, categorical_value);
+
     if (diagnosticsEnabled() && shouldLogSeriesDiagnostics(series_name) && time >= 75.0 &&
         time <= 82.0)
     {
       qDebug() << "MDF sample" << QString::fromStdString(series_name) << "index" << sample
-               << "time" << time << "physical" << QString::fromStdString(value) << "valid"
-               << true;
+               << "time" << time << "physical" << QString::fromStdString(value)
+               << "raw_category_valid" << has_raw_category << "raw_category" << categorical_value
+               << "valid" << true;
     }
-    // Keep string/categorical series on the same MDF time base as numeric data.
-    series->second.pushBack({ time, value });
+
+    // MDF value-to-text conversions are often enumerations. Preserve their raw
+    // non-negative integer code as the plotted categorical coordinate instead
+    // of re-numbering only the strings encountered in this recording. This
+    // keeps, for example, 0=OFF and 2=ON at Y=0 and Y=2 even if ON is the first
+    // or only state present. Non-integer/text-only channels retain the existing
+    // dense string-category behavior.
+    if (has_raw_category)
+    {
+      series->second.pushBackMapped(time, categorical_value, value);
+    }
+    else
+    {
+      series->second.pushBack({ time, value });
+    }
     stats.imported++;
   }
 
